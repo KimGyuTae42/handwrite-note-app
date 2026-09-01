@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>손글씨 인식 노트</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ===================== 목록 화면 ===================== -->
+  <section id="view-list" class="view active">
+    <aside class="sidebar">
+      <div class="sidebar-title">문서</div>
+      <div id="folder-tree" class="folder-tree"></div>
+      <div class="trash-row" id="trash-btn">🗑️ 휴지통</div>
+    </aside>
+    <main class="list-main">
+      <div class="topbar">
+        <button class="icon-btn" id="back-btn" title="뒤로">‹</button>
+        <h2 id="current-folder-name">문서</h2>
+        <div class="topbar-actions">
+          <button class="icon-btn" id="new-btn" title="새로 만들기">＋</button>
+          <button class="icon-btn" id="search-btn" title="검색">🔍</button>
+          <button class="icon-btn" id="settings-btn" title="설정">⚙️</button>
+        </div>
+      </div>
+      <div id="search-bar" class="search-bar hidden">
+        <input id="search-input" type="text" placeholder="노트 검색" />
+      </div>
+      <div id="note-grid" class="note-grid"></div>
+      <div id="empty-hint" class="empty-hint hidden">＋ 버튼을 눌러 새 폴더나 노트를 만들어보세요.</div>
+    </main>
+  </section>
+
+  <!-- ===================== 설정 화면 ===================== -->
+  <section id="view-settings" class="view">
+    <main class="settings-main">
+      <div class="topbar">
+        <button class="icon-btn" id="settings-back-btn" title="뒤로">‹</button>
+        <h2>설정</h2>
+      </div>
+
+      <div class="settings-section">
+        <h3>기본 템플릿</h3>
+        <p class="hint">새 노트를 만들 때 기본으로 사용할 배경(PDF 1페이지)을 등록하세요.</p>
+        <div id="template-list" class="thumb-row"></div>
+        <button class="ghost-btn" id="add-template-btn">＋ 템플릿 추가 (PDF)</button>
+        <input type="file" id="template-file-input" accept="application/pdf" class="hidden" />
+      </div>
+
+      <div class="settings-section">
+        <h3>글꼴</h3>
+        <p class="hint">인식된 손글씨를 어떤 글꼴로 바꿀지 등록하세요 (TTF 파일).</p>
+        <div id="font-list" class="font-row"></div>
+        <button class="ghost-btn" id="add-font-btn">＋ 글꼴 추가 (TTF)</button>
+        <input type="file" id="font-file-input" accept=".ttf,font/ttf" class="hidden" />
+      </div>
+
+      <div class="settings-section">
+        <h3>인식 설정</h3>
+        <label class="hint">변환 신뢰도 기준 (이 값 이상일 때만 글자로 변환)</label>
+        <div class="threshold-row">
+          <input type="range" id="threshold-range" min="30" max="95" value="80" />
+          <span id="threshold-value">80%</span>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3>계정 정보</h3>
+        <input type="text" id="account-email" class="text-input" placeholder="이메일" />
+        <p class="hint">※ 이번 1단계 프로토타입은 서버(Supabase)가 없어 브라우저에만 저장됩니다.</p>
+      </div>
+    </main>
+  </section>
+
+  <!-- ===================== 노트 편집 화면 ===================== -->
+  <section id="view-note" class="view">
+    <div class="tabbar">
+      <button class="icon-btn" id="home-btn" title="목록으로">🏠</button>
+      <div id="tabs" class="tabs"></div>
+    </div>
+    <div class="toolbar">
+      <button class="tool-btn" data-tool="select" title="선택">↖</button>
+      <button class="tool-btn" data-tool="pen-fountain" title="만년필">🖋️</button>
+      <button class="tool-btn" data-tool="pen-brush" title="붓">🖌️</button>
+      <button class="tool-btn" data-tool="highlighter" title="하이라이터">🖍️</button>
+      <button class="tool-btn" data-tool="eraser" title="지우개">🧹</button>
+      <button class="tool-btn" data-tool="lasso" title="올가미">◯</button>
+      <span class="sep"></span>
+      <button class="icon-btn" id="undo-btn" title="실행 취소">↺</button>
+      <button class="icon-btn" id="redo-btn" title="다시 실행">↻</button>
+      <span class="sep"></span>
+      <div class="thickness-wrap">
+        <input type="range" id="thickness-range" min="1" max="28" value="4" />
+        <span id="thickness-value">4px</span>
+      </div>
+      <div id="color-swatches" class="swatches"></div>
+      <input type="color" id="color-picker" value="#111111" title="색상" />
+      <span class="sep"></span>
+      <button class="icon-btn accent" id="convert-btn" title="지금 변환">✨ 변환</button>
+      <button class="icon-btn" id="export-btn" title="내보내기">⇪</button>
+    </div>
+    <div class="canvas-wrap" id="canvas-wrap">
+      <img id="template-bg" draggable="false" />
+      <canvas id="ink-canvas"></canvas>
+      <div id="text-layer"></div>
+      <canvas id="lasso-overlay"></canvas>
+      <div id="ocr-status" class="ocr-status hidden">인식 중…</div>
+    </div>
+  </section>
+
+</div>
+
+<div id="modal-root"></div>
+
+<!-- 외부 라이브러리 (CDN) -->
+<script src="https://unpkg.com/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<script src="js/db.js"></script>
+<script src="js/canvas.js"></script>
+<script src="js/ocr.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
