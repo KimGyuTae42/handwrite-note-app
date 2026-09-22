@@ -74,6 +74,33 @@
 
 ---
 
+## 4. 로그인 + 계정별 데이터 저장/동기화 켜기
+
+지금 앱은 로그인 기능이 실제로 붙어있어요. 아래 두 가지만 해주면 바로 동작합니다.
+
+### 4-1. 이메일 로그인 켜기
+Supabase 대시보드 → **Authentication → Providers → Email** 이 기본적으로 켜져 있어요.
+테스트를 빠르게 하고 싶다면 같은 화면에서 **Confirm email** 옵션을 꺼두면
+회원가입 후 이메일 인증 없이 바로 로그인할 수 있습니다 (나중에 실제로 배포할 땐 다시 켜는 걸 추천해요).
+
+### 4-2. 데이터 테이블 만들기
+Supabase 대시보드 → **SQL Editor → New query**에 이 프로젝트의 `supabase/schema.sql` 파일
+내용을 그대로 붙여넣고 **Run** 하세요. (계정별로 데이터를 분리해서 저장하는 테이블 하나와,
+"내 데이터만 보이게" 하는 보안 규칙(RLS)이 만들어집니다.)
+
+### 4-3. .env(.local) 확인
+`.env` 또는 `.env.local`에 Supabase **Project URL / anon public key**가 채워져 있어야 해요
+(`.env.local`을 쓰면 `.env`보다 우선 적용되고, 둘 다 git에는 올라가지 않습니다). Vercel에 배포했다면
+**Settings → Environment Variables**에도 같은 값을 등록하고 재배포해주세요.
+
+이렇게 해두면:
+- 처음 방문 시 로그인 화면이 뜨고, 이메일/비밀번호로 회원가입·로그인할 수 있어요.
+- 로그인하면 내 폴더/노트/추가한 템플릿·폰트가 Supabase에 저장돼요 (수정할 때마다 자동 저장, 0.7초 정도 디바운스).
+- 다른 기기(또는 다른 브라우저)에서 같은 계정으로 로그인하면 저장된 데이터를 그대로 불러와서 이어서 쓸 수 있어요 — 이게 기기 간 동기화입니다.
+- `.env`를 아직 안 채웠다면 로그인 화면에서 "로그인 없이 이 기기에서만 써보기"를 눌러 예전처럼 로컬 전용으로 계속 써볼 수 있어요.
+
+---
+
 ## (선택) 로컬 미리보기가 필요하다면
 
 지금 만든 화면을 GitHub에 올리기 전에 내 컴퓨터에서 먼저 보고 싶다면 아래 명령어가 필요합니다
@@ -93,19 +120,20 @@ npm run dev
 
 ```
 handwrite-note-app/
-├─ index.html          모든 화면(목록/설정/노트편집) 구조
+├─ index.html          모든 화면(로그인/목록/설정/노트편집) 구조
 ├─ css/style.css        전체 스타일
 ├─ public/js/           일반 스크립트 (그대로 배포됨)
-│   ├─ db.js            IndexedDB 저장소
-│   ├─ canvas.js        필기 엔진 (펜/지우개/올가미/그룹핑)
-│   └─ ocr.js           손글씨 인식 (Tesseract.js)
-├─ js/supabaseClient.js Supabase 연결 준비 (7차시부터 사용)
-├─ public/assets/       템플릿 PDF, TTF 폰트 저장용 (2차시부터 사용)
+│   ├─ db.js            IndexedDB 저장소 (로컬 전용 모드 대비, 아직 미연결)
+│   ├─ canvas.js        필기 엔진 (펜/지우개/올가미/그룹핑) - 캔버스에는 아직 미연결
+│   ├─ ocr.js           손글씨 인식 (Tesseract.js) - 아직 미연결
+│   └─ app.js           화면 전환 / 폴더·노트 정리 / 설정 / 로그인·동기화 로직
+├─ js/supabaseClient.js Supabase 클라이언트 (로그인 + 계정별 저장에 실제로 사용 중)
+├─ supabase/schema.sql  Supabase SQL Editor에서 한 번 실행할 테이블/보안 규칙
+├─ public/assets/       기본 제공 템플릿(PDF→PNG) / 폰트(TTF)
 ├─ vite.config.js
 ├─ package.json
 ├─ .env.example
 └─ .gitignore
 ```
 
-> `js/app.js` (화면들을 실제로 연결하는 코드)는 아직 없습니다.
-> 다음 기능부터 하나씩 순서대로 만들면서 `public/js/app.js`로 추가할 예정입니다.
+> 캔버스에 실제로 펜 그리기를 연결하는 작업은 아직 다음 단계로 남아있어요.

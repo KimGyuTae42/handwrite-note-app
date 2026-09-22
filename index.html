@@ -9,8 +9,31 @@
 <body>
 <div id="app">
 
+  <!-- ===================== 로그인 화면 ===================== -->
+  <section id="view-auth" class="view">
+    <div class="auth-wrap">
+      <div class="auth-box">
+        <h2>손글씨 인식 노트</h2>
+        <p class="hint">계정으로 로그인하면 다른 기기에서도 내 노트를 이어서 쓸 수 있어요.</p>
+
+        <div id="auth-form-area">
+          <input type="email" id="auth-email" class="text-input" placeholder="이메일" style="width:100%;" />
+          <input type="password" id="auth-password" class="text-input" placeholder="비밀번호 (6자 이상)" style="width:100%;margin-top:8px;" />
+          <div id="auth-error" class="auth-error hidden"></div>
+          <button class="btn primary" id="auth-login-btn" style="width:100%;margin-top:12px;">로그인</button>
+          <button class="btn plain" id="auth-signup-btn" style="width:100%;margin-top:8px;">회원가입</button>
+        </div>
+
+        <div id="auth-not-configured" class="hidden">
+          <p class="hint">Supabase 연동이 아직 설정되지 않았어요.<br/>.env(.local)에 URL/anon key를 채운 뒤 다시 열어주세요.</p>
+          <button class="btn primary" id="auth-skip-btn" style="width:100%;margin-top:12px;">로그인 없이 이 기기에서만 써보기</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- ===================== 목록 화면 ===================== -->
-  <section id="view-list" class="view active">
+  <section id="view-list" class="view">
     <aside class="sidebar">
       <div class="sidebar-title">문서</div>
       <div id="folder-tree" class="folder-tree"></div>
@@ -69,8 +92,7 @@
 
       <div class="settings-section">
         <h3>계정 정보</h3>
-        <input type="text" id="account-email" class="text-input" placeholder="이메일" />
-        <p class="hint">※ 이번 1단계 프로토타입은 서버(Supabase)가 없어 브라우저에만 저장됩니다.</p>
+        <div id="account-info"></div>
       </div>
     </main>
   </section>
@@ -81,28 +103,33 @@
       <button class="icon-btn" id="home-btn" title="목록으로">🏠</button>
       <div id="tabs" class="tabs"></div>
     </div>
-    <div class="toolbar">
-      <button class="tool-btn" data-tool="select" title="선택">↖</button>
-      <button class="tool-btn" data-tool="pen-fountain" title="만년필">🖋️</button>
-      <button class="tool-btn" data-tool="pen-brush" title="붓">🖌️</button>
-      <button class="tool-btn" data-tool="highlighter" title="하이라이터">🖍️</button>
-      <button class="tool-btn" data-tool="eraser" title="지우개">🧹</button>
-      <button class="tool-btn" data-tool="lasso" title="올가미">◯</button>
-      <span class="sep"></span>
-      <button class="icon-btn" id="undo-btn" title="실행 취소">↺</button>
-      <button class="icon-btn" id="redo-btn" title="다시 실행">↻</button>
-      <span class="sep"></span>
-      <div class="thickness-wrap">
-        <input type="range" id="thickness-range" min="1" max="28" value="4" />
-        <span id="thickness-value">4px</span>
-      </div>
-      <div id="color-swatches" class="swatches"></div>
-      <input type="color" id="color-picker" value="#111111" title="색상" />
-      <span class="sep"></span>
-      <button class="icon-btn accent" id="convert-btn" title="지금 변환">✨ 변환</button>
-      <button class="icon-btn" id="export-btn" title="내보내기">⇪</button>
-    </div>
     <div class="canvas-wrap" id="canvas-wrap">
+      <div class="pill tools-pill" id="tools-pill">
+        <button class="tool-btn" data-tool="pen-fountain" title="만년필">🖊️</button>
+        <button class="tool-btn" data-tool="pen-brush" title="붓">🖌️</button>
+        <button class="tool-btn" data-tool="highlighter" title="하이라이터">🖍️</button>
+        <button class="tool-btn" data-tool="eraser" title="지우개">🧹</button>
+        <button class="tool-btn" data-tool="lasso" title="올가미">◯</button>
+        <button class="tool-btn" data-tool="select" title="선택">↖</button>
+        <span class="pill-sep"></span>
+        <button class="icon-only" id="convert-btn" title="지금 변환">✨</button>
+        <button class="icon-only" id="export-btn" title="내보내기">⇪</button>
+        <button class="icon-only" id="style-toggle-btn" title="색상/두께">›</button>
+      </div>
+      <div class="pill history-pill" id="history-pill">
+        <button class="icon-only" id="undo-btn" title="실행 취소">↺</button>
+        <button class="icon-only" id="redo-btn" title="다시 실행">↻</button>
+      </div>
+      <div class="pill style-pill" id="style-pill">
+        <div id="color-swatches" class="swatches"></div>
+        <button class="swatch add-swatch" id="add-color-btn" title="색상 추가">＋</button>
+        <input type="color" id="color-picker" class="color-picker-hidden" value="#111111" />
+        <span class="pill-sep"></span>
+        <div class="thickness-dots" id="thickness-dots"></div>
+        <span class="pill-sep"></span>
+        <button class="icon-only wave-btn" title="곡선 스타일 (추후 구현)">〜</button>
+      </div>
+
       <img id="template-bg" draggable="false" />
       <canvas id="ink-canvas"></canvas>
       <div id="text-layer"></div>
@@ -123,6 +150,7 @@
 <script src="js/db.js"></script>
 <script src="js/canvas.js"></script>
 <script src="js/ocr.js"></script>
+<script type="module" src="js/supabaseClient.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

@@ -12,11 +12,23 @@ if (window.pdfjsLib) {
     "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 }
 
-// 기본 제공 폰트 (사용자가 올려준 TTF 2개를 미리 내장)
+// 기본 제공 템플릿 (PDF에서 만든 6종 - 모든 계정에 항상 제공되는 내장 템플릿)
+const BUNDLED_TEMPLATES = [
+  { id: "t01", name: "모눈 (전체)", img: "assets/templates/template-01.png" },
+  { id: "t02", name: "모눈 (2단)", img: "assets/templates/template-02.png" },
+  { id: "t03", name: "모눈 (점그리드 2단)", img: "assets/templates/template-03.png" },
+  { id: "t04", name: "모눈 (4분할)", img: "assets/templates/template-04.png" },
+  { id: "t05", name: "모눈 (인덱스탭)", img: "assets/templates/template-05.png" },
+  { id: "t06", name: "모눈 (본문 짧게)", img: "assets/templates/template-06.png" },
+];
+const BUNDLED_TEMPLATE_IDS = new Set(BUNDLED_TEMPLATES.map((t) => t.id));
+
+// 기본 제공 폰트 (사용자가 올려준 TTF 2개를 미리 내장 - 모든 계정에 항상 제공)
 const BUNDLED_FONTS = [
   { id: "font1", name: "그리운X국한박 오춘기 김작가", file: "assets/fonts/font-01.ttf", family: "customFont_font1" },
   { id: "font2", name: "온글잎 박다현체", file: "assets/fonts/font-02.ttf", family: "customFont_font2" },
 ];
+const BUNDLED_FONT_IDS = new Set(BUNDLED_FONTS.map((f) => f.id));
 
 function loadBundledFonts() {
   BUNDLED_FONTS.forEach((f) => {
@@ -29,6 +41,7 @@ function loadBundledFonts() {
 }
 
 const state = {
+  user: null, // Supabase 로그인 사용자 (null이면 로컬 전용 모드)
   folders: [
     { id: "f-doc", name: "문서", parentId: null },
     { id: "f-math", name: "수학", parentId: "f-doc" },
@@ -40,21 +53,9 @@ const state = {
     { id: "n3", name: "물리", folderId: "f-sci", trashed: false, templateId: "t02" },
     { id: "n4", name: "화학", folderId: "f-sci", trashed: false, templateId: "t04" },
   ],
-  // PDF(_1__모눈__grid__1__blue_chalk.pdf)의 6페이지를 기본 템플릿으로 사용
-  templates: [
-    { id: "t01", name: "모눈 (전체)", img: "assets/templates/template-01.png" },
-    { id: "t02", name: "모눈 (2단)", img: "assets/templates/template-02.png" },
-    { id: "t03", name: "모눈 (점그리드 2단)", img: "assets/templates/template-03.png" },
-    { id: "t04", name: "모눈 (4분할)", img: "assets/templates/template-04.png" },
-    { id: "t05", name: "모눈 (인덱스탭)", img: "assets/templates/template-05.png" },
-    { id: "t06", name: "모눈 (본문 짧게)", img: "assets/templates/template-06.png" },
-  ],
-  // TTF 업로드로 받은 폰트 (실제 파일을 FontFace로 로드해서 사용)
-  fonts: [
-    { id: "font1", name: "그리운X국한박 오춘기 김작가", family: "customFont_font1" },
-    { id: "font2", name: "온글잎 박다현체", family: "customFont_font2" },
-  ],
-  settings: { defaultTemplateId: "t01", defaultFontId: "font1" },
+  templates: [...BUNDLED_TEMPLATES],
+  fonts: BUNDLED_FONTS.map((f) => ({ id: f.id, name: f.name, family: f.family })),
+  settings: { defaultTemplateId: "t01", defaultFontId: "font1", threshold: 80 },
   expanded: new Set(["f-doc", "f-math", "f-sci"]),
   currentFolderId: "f-doc",
   showTrash: false,
@@ -63,7 +64,7 @@ const state = {
   activeNoteId: null,
 };
 
-const PALETTE = ["#111111", "#e11d48", "#2563eb", "#16a34a", "#f59e0b", "#9333ea"];
+const PALETTE = ["#111111", "#2563eb", "#e11d48"];
 
 // ---------- 화면 전환 ----------
 function switchView(name) {
@@ -116,6 +117,202 @@ function activateNote(id) {
   state.activeNoteId = id;
   renderTabs();
   applyNoteTemplate(id);
+}
+
+// ============ 로그인 / 계정별 저장·동기화 (Supabase) ============
+function getClient() {
+  return window.__supabase || null;
+}
+
+let syncTimer = null;
+function scheduleSync() {
+  if (!state.user) return; // 로컬 전용 모드에서는 저장하지 않음
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(saveUserData, 700);
+}
+
+async function saveUserData() {
+  const client = getClient();
+  if (!client || !state.user) return;
+  const payload = {
+    folders: state.folders,
+    notes: state.notes,
+    templates: state.templates.filter((t) => !BUNDLED_TEMPLATE_IDS.has(t.id)),
+    fonts: state.fonts.filter((f) => !BUNDLED_FONT_IDS.has(f.id)),
+    settings: state.settings,
+  };
+  const { error } = await client.from("user_data").upsert({
+    user_id: state.user.id,
+    data: payload,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) console.error("동기화 실패:", error);
+}
+
+function defaultFolders() {
+  return [{ id: "f-doc", name: "문서", parentId: null }];
+}
+
+async function loadUserData() {
+  const client = getClient();
+  const { data, error } = await client
+    .from("user_data")
+    .select("data")
+    .eq("user_id", state.user.id)
+    .maybeSingle();
+
+  if (error) {
+    console.error("불러오기 실패:", error);
+    alert("데이터를 불러오지 못했습니다. supabase/schema.sql을 SQL Editor에서 실행했는지 확인해주세요.");
+    state.folders = defaultFolders();
+    state.notes = [];
+  } else if (data && data.data) {
+    const d = data.data;
+    state.folders = d.folders && d.folders.length ? d.folders : defaultFolders();
+    state.notes = d.notes || [];
+    state.templates = [...BUNDLED_TEMPLATES, ...(d.templates || [])];
+    state.fonts = [...BUNDLED_FONTS.map((f) => ({ id: f.id, name: f.name, family: f.family })), ...(d.fonts || [])];
+    state.settings = { ...state.settings, ...(d.settings || {}) };
+    reloadCustomFontFaces();
+  } else {
+    // 첫 로그인: 빈 상태로 시작하고 즉시 저장
+    state.folders = defaultFolders();
+    state.notes = [];
+    state.templates = [...BUNDLED_TEMPLATES];
+    state.fonts = BUNDLED_FONTS.map((f) => ({ id: f.id, name: f.name, family: f.family }));
+    await saveUserData();
+  }
+
+  state.currentFolderId = "f-doc";
+  state.expanded = new Set(["f-doc"]);
+  state.showTrash = false;
+  state.searchTerm = "";
+  state.openTabs = [];
+  state.activeNoteId = null;
+}
+
+function reloadCustomFontFaces() {
+  state.fonts.forEach((f) => {
+    if (f.dataUrl) {
+      const face = new FontFace(f.family, `url(${f.dataUrl})`);
+      face.load().then((loaded) => document.fonts.add(loaded)).catch((e) => console.error(e));
+    }
+  });
+}
+
+async function initAuth() {
+  const client = getClient();
+
+  if (!client) {
+    document.getElementById("auth-form-area").classList.add("hidden");
+    document.getElementById("auth-not-configured").classList.remove("hidden");
+    document.getElementById("auth-skip-btn").addEventListener("click", () => {
+      switchView("list");
+      renderAll();
+    });
+    switchView("auth");
+    renderAccountInfo();
+    return;
+  }
+
+  document.getElementById("auth-login-btn").addEventListener("click", () => handleAuthSubmit("login"));
+  document.getElementById("auth-signup-btn").addEventListener("click", () => handleAuthSubmit("signup"));
+  document.getElementById("auth-password").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleAuthSubmit("login");
+  });
+
+  client.auth.onAuthStateChange((_event, session) => {
+    if (session && session.user && (!state.user || state.user.id !== session.user.id)) {
+      onLoggedIn(session.user);
+    }
+  });
+
+  try {
+    const { data } = await client.auth.getSession();
+    if (data && data.session && data.session.user) {
+      await onLoggedIn(data.session.user);
+      return;
+    }
+  } catch (e) {
+    console.error(e);
+  }
+  switchView("auth");
+}
+
+async function handleAuthSubmit(mode) {
+  const client = getClient();
+  const email = document.getElementById("auth-email").value.trim();
+  const password = document.getElementById("auth-password").value;
+  hideAuthError();
+  if (!email || !password) { showAuthError("이메일과 비밀번호를 입력해주세요."); return; }
+
+  try {
+    if (mode === "signup") {
+      const { data, error } = await client.auth.signUp({ email, password });
+      if (error) throw error;
+      if (!data.session) {
+        showAuthError("가입 확인 메일을 보냈어요. 메일함을 확인한 뒤 로그인해주세요.", true);
+        return;
+      }
+    } else {
+      const { error } = await client.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+    }
+  } catch (e) {
+    showAuthError(translateAuthError(e.message));
+  }
+}
+
+function translateAuthError(msg) {
+  if (!msg) return "로그인에 실패했습니다.";
+  if (msg.includes("Invalid login credentials")) return "이메일 또는 비밀번호가 올바르지 않습니다.";
+  if (msg.includes("already registered")) return "이미 가입된 이메일입니다. 로그인해주세요.";
+  if (msg.includes("Password should be")) return "비밀번호는 6자 이상이어야 합니다.";
+  return msg;
+}
+
+function showAuthError(msg, isInfo) {
+  const el = document.getElementById("auth-error");
+  el.textContent = msg;
+  el.style.color = isInfo ? "var(--muted)" : "#e11d48";
+  el.classList.remove("hidden");
+}
+function hideAuthError() {
+  document.getElementById("auth-error").classList.add("hidden");
+}
+
+async function onLoggedIn(user) {
+  state.user = user;
+  await loadUserData();
+  renderAll();
+  renderAccountInfo();
+  switchView("list");
+}
+
+async function logout() {
+  const client = getClient();
+  if (client) await client.auth.signOut();
+  state.user = null;
+  state.openTabs = [];
+  state.activeNoteId = null;
+  document.getElementById("auth-email").value = "";
+  document.getElementById("auth-password").value = "";
+  hideAuthError();
+  switchView("auth");
+}
+
+function renderAccountInfo() {
+  const wrap = document.getElementById("account-info");
+  if (!wrap) return;
+  if (state.user) {
+    wrap.innerHTML = `
+      <p class="hint">${escapeHtml(state.user.email)} 계정으로 로그인됨<br/>다른 기기에서 같은 계정으로 로그인하면 노트가 그대로 동기화됩니다.</p>
+      <button class="btn plain" id="logout-btn">로그아웃</button>
+    `;
+    document.getElementById("logout-btn").addEventListener("click", logout);
+  } else {
+    wrap.innerHTML = `<p class="hint">로그인하지 않은 상태입니다. (이 기기에만 저장되고 동기화되지 않아요)</p>`;
+  }
 }
 
 // ---------- 폴더 트리(사이드바) ----------
@@ -446,6 +643,10 @@ function renderTabs() {
 }
 
 // 도구 버튼 - 클릭 시 선택 표시만 (실제 그리기 기능은 다음 단계)
+const THICKNESS_PRESETS = [2, 6, 14];
+const THICKNESS_DOT_SIZES = [8, 14, 22];
+let currentThickness = THICKNESS_PRESETS[1];
+
 function initToolbar() {
   document.querySelectorAll(".tool-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -453,11 +654,22 @@ function initToolbar() {
       btn.classList.add("active");
     });
   });
-  document.querySelector('.tool-btn[data-tool="select"]').classList.add("active");
+  document.querySelector('.tool-btn[data-tool="pen-fountain"]').classList.add("active");
 
-  const thicknessRange = document.getElementById("thickness-range");
-  const thicknessValue = document.getElementById("thickness-value");
-  thicknessRange.addEventListener("input", () => { thicknessValue.textContent = thicknessRange.value + "px"; });
+  const dotsWrap = document.getElementById("thickness-dots");
+  THICKNESS_PRESETS.forEach((thickness, i) => {
+    const dot = document.createElement("button");
+    dot.className = "dot-btn" + (i === 1 ? " selected" : "");
+    dot.style.width = THICKNESS_DOT_SIZES[i] + "px";
+    dot.style.height = THICKNESS_DOT_SIZES[i] + "px";
+    dot.title = thickness + "px";
+    dot.addEventListener("click", () => {
+      currentThickness = thickness;
+      document.querySelectorAll(".dot-btn").forEach((d) => d.classList.remove("selected"));
+      dot.classList.add("selected");
+    });
+    dotsWrap.appendChild(dot);
+  });
 
   const swatchWrap = document.getElementById("color-swatches");
   PALETTE.forEach((color, i) => {
@@ -471,8 +683,13 @@ function initToolbar() {
     });
     swatchWrap.appendChild(sw);
   });
+  document.getElementById("add-color-btn").addEventListener("click", () => document.getElementById("color-picker").click());
   document.getElementById("color-picker").addEventListener("input", () => {
     document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("selected"));
+  });
+
+  document.getElementById("style-toggle-btn").addEventListener("click", () => {
+    document.getElementById("style-pill").classList.toggle("hidden");
   });
 }
 
@@ -508,9 +725,10 @@ function renderTemplateList() {
       e.stopPropagation();
       state.templates = state.templates.filter((x) => x.id !== t.id);
       renderTemplateList();
+      scheduleSync();
     });
     thumb.appendChild(del);
-    thumb.addEventListener("click", () => { state.settings.defaultTemplateId = t.id; renderTemplateList(); });
+    thumb.addEventListener("click", () => { state.settings.defaultTemplateId = t.id; renderTemplateList(); scheduleSync(); });
 
     const label = document.createElement("div");
     label.style.fontSize = "11px";
@@ -556,9 +774,10 @@ function renderFontList() {
       state.fonts = state.fonts.filter((x) => x.id !== f.id);
       if (state.settings.defaultFontId === f.id) state.settings.defaultFontId = state.fonts[0]?.id || null;
       renderFontList();
+      scheduleSync();
     });
     chip.appendChild(del);
-    chip.addEventListener("click", () => { state.settings.defaultFontId = f.id; renderFontList(); });
+    chip.addEventListener("click", () => { state.settings.defaultFontId = f.id; renderFontList(); scheduleSync(); });
     wrap.appendChild(chip);
   });
 }
@@ -588,6 +807,7 @@ async function handleTemplateUpload(file) {
       });
     }
     renderTemplateList();
+    scheduleSync();
   } catch (err) {
     console.error(err);
     alert("PDF를 템플릿으로 변환하지 못했습니다. (" + err.message + ")");
@@ -603,13 +823,14 @@ async function handleFontUpload(file) {
   btn.textContent = "글꼴 불러오는 중…";
   btn.disabled = true;
   try {
-    const buf = await file.arrayBuffer();
+    const dataUrl = await fileToDataUrl(file);
     const family = "customFont_" + uid();
-    const face = new FontFace(family, buf);
+    const face = new FontFace(family, `url(${dataUrl})`);
     const loaded = await face.load();
     document.fonts.add(loaded);
-    state.fonts.push({ id: uid(), name: file.name.replace(/\.ttf$/i, ""), family });
+    state.fonts.push({ id: uid(), name: file.name.replace(/\.ttf$/i, ""), family, dataUrl });
     renderFontList();
+    scheduleSync();
   } catch (err) {
     console.error(err);
     alert("폰트를 불러오지 못했습니다. TTF 파일이 맞는지 확인해주세요. (" + err.message + ")");
@@ -619,9 +840,19 @@ async function handleFontUpload(file) {
   }
 }
 
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 function initSettings() {
   renderTemplateList();
   renderFontList();
+  renderAccountInfo();
 
   document.getElementById("add-template-btn").addEventListener("click", () => document.getElementById("template-file-input").click());
   document.getElementById("template-file-input").addEventListener("change", (e) => {
@@ -641,13 +872,20 @@ function initSettings() {
 
   const thresholdRange = document.getElementById("threshold-range");
   const thresholdValue = document.getElementById("threshold-value");
-  thresholdRange.addEventListener("input", () => { thresholdValue.textContent = thresholdRange.value + "%"; });
+  thresholdRange.value = state.settings.threshold;
+  thresholdValue.textContent = state.settings.threshold + "%";
+  thresholdRange.addEventListener("input", () => {
+    thresholdValue.textContent = thresholdRange.value + "%";
+    state.settings.threshold = Number(thresholdRange.value);
+    scheduleSync();
+  });
 }
 
 // ---------- 전체 다시 그리기 ----------
 function renderAll() {
   renderFolderTree();
   renderGrid();
+  scheduleSync();
 }
 
 // ---------- 초기화 ----------
@@ -681,6 +919,5 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("home-btn").addEventListener("click", () => switchView("list"));
   initToolbar();
 
-  renderAll();
-  switchView("list");
+  initAuth();
 });
