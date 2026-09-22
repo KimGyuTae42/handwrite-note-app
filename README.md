@@ -63,14 +63,14 @@
 2. **New Project** 클릭
 3. 프로젝트 이름 입력, DB 비밀번호는 안전한 곳에 따로 저장, 리전은
    **Northeast Asia (Seoul)** 선택 → **Create new project**
-4. 생성이 끝나면 왼쪽 메뉴 **Project Settings → API**로 이동해서 아래 두 값을 확인해두세요
+4. 생성이 끝나면 왼쪽 메뉴 **Project Settings → API Keys**로 이동해서 아래 값을 확인해두세요
    (지금 당장 어디 입력할 필요는 없고, 나중에 실제로 연결할 때 씁니다):
    - **Project URL**
-   - **anon public** key
+   - **Publishable key** (`sb_publishable_...`로 시작) — 예전 프로젝트라면 이름이 **anon public** key로 보일 수도 있어요, 같은 역할입니다.
 
 이 값들은 **7차시(서버·DB 추가)** 단계에서 실제로 연결할 때 사용합니다.
 그때 Vercel 웹사이트의 **Settings → Environment Variables**에서
-`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`를 등록하는 방법도 웹에서 그대로 진행할 수 있어요.
+`VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`를 등록하는 방법도 웹에서 그대로 진행할 수 있어요.
 
 ---
 
@@ -89,9 +89,11 @@ Supabase 대시보드 → **SQL Editor → New query**에 이 프로젝트의 `s
 "내 데이터만 보이게" 하는 보안 규칙(RLS)이 만들어집니다.)
 
 ### 4-3. .env(.local) 확인
-`.env` 또는 `.env.local`에 Supabase **Project URL / anon public key**가 채워져 있어야 해요
-(`.env.local`을 쓰면 `.env`보다 우선 적용되고, 둘 다 git에는 올라가지 않습니다). Vercel에 배포했다면
-**Settings → Environment Variables**에도 같은 값을 등록하고 재배포해주세요.
+`.env` 또는 `.env.local`에 Supabase **Project URL**과 키가 채워져 있어야 해요
+(`.env.local`을 쓰면 `.env`보다 우선 적용되고, 둘 다 git에는 올라가지 않습니다).
+키 변수명은 `VITE_SUPABASE_PUBLISHABLE_KEY` (최근 프로젝트) 또는 `VITE_SUPABASE_ANON_KEY`
+(예전 프로젝트) 둘 중 아무거나 써도 코드가 알아서 인식합니다 — 둘 다 넣을 필요는 없어요.
+Vercel에 배포했다면 **Settings → Environment Variables**에도 같은 값을 등록하고 재배포해주세요.
 
 이렇게 해두면:
 - 처음 방문 시 로그인 화면이 뜨고, 이메일/비밀번호로 회원가입·로그인할 수 있어요.
