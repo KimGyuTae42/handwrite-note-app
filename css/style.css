@@ -155,10 +155,10 @@ button{font-family:inherit;cursor:pointer;}
 #template-bg{position:absolute;top:0;left:0;width:1000px;height:1400px;object-fit:cover;background:#fff;box-shadow:0 4px 20px rgba(0,0,0,.15);}
 #ink-canvas, #lasso-overlay{position:absolute;top:0;left:0;width:1000px;height:1400px;}
 #lasso-overlay{pointer-events:none;}
-#text-layer{position:absolute;top:0;left:0;width:1000px;height:1400px;}
+#text-layer{position:absolute;top:0;left:0;width:1000px;height:1400px;pointer-events:none;}
 .text-el{
   position:absolute;white-space:pre-wrap;line-height:1.15;cursor:text;padding:1px 3px;border-radius:3px;
-  outline:none;
+  outline:none;pointer-events:auto;
 }
 .text-el:hover, .text-el:focus{background:rgba(59,130,246,.08);}
 .ocr-status{

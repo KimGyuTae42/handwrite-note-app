@@ -48,10 +48,10 @@ const state = {
     { id: "f-sci", name: "과학", parentId: "f-doc" },
   ],
   notes: [
-    { id: "n1", name: "미적1", folderId: "f-math", trashed: false, templateId: "t01" },
-    { id: "n2", name: "미적2", folderId: "f-math", trashed: false, templateId: "t03" },
-    { id: "n3", name: "물리", folderId: "f-sci", trashed: false, templateId: "t02" },
-    { id: "n4", name: "화학", folderId: "f-sci", trashed: false, templateId: "t04" },
+    { id: "n1", name: "미적1", folderId: "f-math", trashed: false, templateId: "t01", strokes: [], texts: [] },
+    { id: "n2", name: "미적2", folderId: "f-math", trashed: false, templateId: "t03", strokes: [], texts: [] },
+    { id: "n3", name: "물리", folderId: "f-sci", trashed: false, templateId: "t02", strokes: [], texts: [] },
+    { id: "n4", name: "화학", folderId: "f-sci", trashed: false, templateId: "t04", strokes: [], texts: [] },
   ],
   templates: [...BUNDLED_TEMPLATES],
   fonts: BUNDLED_FONTS.map((f) => ({ id: f.id, name: f.name, family: f.family })),
@@ -86,6 +86,9 @@ function gridPaperDataUri() {
 function applyNoteTemplate(noteId) {
   const note = state.notes.find((n) => n.id === noteId);
   if (!note) return;
+  if (!note.strokes) note.strokes = [];
+  if (!note.texts) note.texts = [];
+
   const tmpl = state.templates.find((t) => t.id === note.templateId);
   const bgImg = document.getElementById("template-bg");
   const ink = document.getElementById("ink-canvas");
@@ -93,23 +96,28 @@ function applyNoteTemplate(noteId) {
   const textLayer = document.getElementById("text-layer");
 
   const applySize = (w, h) => {
-    [bgImg, ink, lasso, textLayer].forEach((el) => {
+    [bgImg, textLayer].forEach((el) => {
       el.style.width = w + "px";
       el.style.height = h + "px";
     });
-    ink.width = w;
-    ink.height = h;
-    lasso.width = w;
-    lasso.height = h;
+    ink.style.width = w + "px";
+    ink.style.height = h + "px";
+    lasso.style.width = w + "px";
+    lasso.style.height = h + "px";
+    if (engine) engine.resize(w, h);
   };
 
   if (tmpl && tmpl.img) {
-    bgImg.onload = () => applySize(bgImg.naturalWidth, bgImg.naturalHeight);
+    bgImg.onload = () => {
+      applySize(bgImg.naturalWidth, bgImg.naturalHeight);
+      if (engine) engine.setNote(note);
+    };
     bgImg.src = tmpl.img;
   } else {
     bgImg.onload = null;
     bgImg.src = gridPaperDataUri();
     applySize(1000, 1400);
+    if (engine) engine.setNote(note);
   }
 }
 
@@ -509,7 +517,7 @@ function openChoiceModal() {
     overlay.remove();
     const result = await newNoteModal();
     if (result) {
-      const note = { id: uid(), name: result.name, folderId: state.currentFolderId, trashed: false, templateId: result.templateId };
+      const note = { id: uid(), name: result.name, folderId: state.currentFolderId, trashed: false, templateId: result.templateId, strokes: [], texts: [] };
       state.notes.push(note);
       state.expanded.add(state.currentFolderId);
       renderAll();
@@ -652,6 +660,7 @@ function initToolbar() {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".tool-btn").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
+      if (engine) engine.tool = btn.dataset.tool;
     });
   });
   document.querySelector('.tool-btn[data-tool="pen-fountain"]').classList.add("active");
@@ -665,6 +674,7 @@ function initToolbar() {
     dot.title = thickness + "px";
     dot.addEventListener("click", () => {
       currentThickness = thickness;
+      if (engine) engine.width = thickness;
       document.querySelectorAll(".dot-btn").forEach((d) => d.classList.remove("selected"));
       dot.classList.add("selected");
     });
@@ -680,17 +690,84 @@ function initToolbar() {
       document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("selected"));
       sw.classList.add("selected");
       document.getElementById("color-picker").value = color;
+      if (engine) engine.color = color;
     });
     swatchWrap.appendChild(sw);
   });
   document.getElementById("add-color-btn").addEventListener("click", () => document.getElementById("color-picker").click());
-  document.getElementById("color-picker").addEventListener("input", () => {
+  document.getElementById("color-picker").addEventListener("input", (e) => {
     document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("selected"));
+    if (engine) engine.color = e.target.value;
   });
 
   document.getElementById("style-toggle-btn").addEventListener("click", () => {
     document.getElementById("style-pill").classList.toggle("hidden");
   });
+
+  document.getElementById("undo-btn").addEventListener("click", () => engine && engine.undo());
+  document.getElementById("redo-btn").addEventListener("click", () => engine && engine.redo());
+
+  document.getElementById("convert-btn").addEventListener("click", () => {
+    if (!engine) return;
+    const n = engine.convertAllPending();
+    if (n === 0) flashOcrStatus("변환할 손글씨가 없어요");
+  });
+}
+
+function flashOcrStatus(msg) {
+  const el = document.getElementById("ocr-status");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  setTimeout(() => { el.classList.add("hidden"); el.textContent = "인식 중…"; }, 1200);
+}
+
+// ---------- 필기 엔진 + 손글씨 인식 연결 ----------
+let engine = null;
+let ocrActiveCount = 0;
+
+function showOcrStatus() {
+  ocrActiveCount++;
+  document.getElementById("ocr-status").textContent = "인식 중…";
+  document.getElementById("ocr-status").classList.remove("hidden");
+}
+function hideOcrStatus() {
+  ocrActiveCount = Math.max(0, ocrActiveCount - 1);
+  if (ocrActiveCount === 0) document.getElementById("ocr-status").classList.add("hidden");
+}
+
+function initEngine() {
+  engine = new InkEngine(
+    document.getElementById("ink-canvas"),
+    document.getElementById("lasso-overlay"),
+    document.getElementById("text-layer")
+  );
+  engine.tool = "pen-fountain";
+  engine.color = PALETTE[0];
+  engine.width = currentThickness;
+
+  engine.onChange = () => scheduleSync();
+
+  engine.onGroupReady = async (groupId) => {
+    const bbox = engine.groupBBox(groupId);
+    if (!bbox) return;
+    showOcrStatus();
+    try {
+      const { text, confidence } = await recognizeCanvasRegion(engine.canvas, bbox);
+      const threshold = state.settings.threshold || 80;
+      if (text && confidence >= threshold) {
+        const fontDef = state.fonts.find((f) => f.id === state.settings.defaultFontId);
+        const fontFamily = fontDef ? `"${fontDef.family}", sans-serif` : "inherit";
+        engine.replaceGroupWithText(groupId, text, fontFamily);
+      } else {
+        engine.keepGroupAsInk(groupId);
+      }
+    } catch (e) {
+      console.error("인식 오류:", e);
+      engine.keepGroupAsInk(groupId);
+    } finally {
+      hideOcrStatus();
+    }
+  };
 }
 
 // ---------- 설정 화면 (시각적 UI만) ----------
@@ -917,6 +994,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // 노트 화면
   document.getElementById("home-btn").addEventListener("click", () => switchView("list"));
+  initEngine();
   initToolbar();
 
   initAuth();
