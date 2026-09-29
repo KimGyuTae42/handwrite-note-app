@@ -130,11 +130,14 @@
         <button class="icon-only wave-btn" title="곡선 스타일 (추후 구현)">〜</button>
       </div>
 
-      <img id="template-bg" draggable="false" />
-      <canvas id="ink-canvas"></canvas>
-      <div id="text-layer"></div>
-      <canvas id="lasso-overlay"></canvas>
+      <div class="canvas-stage" id="canvas-stage">
+        <img id="template-bg" draggable="false" />
+        <canvas id="ink-canvas"></canvas>
+        <div id="text-layer"></div>
+        <canvas id="lasso-overlay"></canvas>
+      </div>
       <div id="ocr-status" class="ocr-status hidden">인식 중…</div>
+      <button class="pill zoom-pill hidden" id="zoom-pill" title="눌러서 100%로 되돌리기">100%</button>
     </div>
   </section>
 
@@ -146,10 +149,12 @@
 <script src="https://unpkg.com/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 
 <script src="js/db.js"></script>
 <script src="js/canvas.js"></script>
 <script src="js/ocr.js"></script>
+<script src="js/cnn.js"></script>
 <script type="module" src="js/supabaseClient.js"></script>
 <script src="js/app.js"></script>
 </body>

@@ -3,12 +3,13 @@
 // note.texts   : [{id, x, y, w, h, text, color, fontFamily, fontSize}]
 
 class InkEngine {
-  constructor(canvasEl, overlayEl, textLayerEl) {
+  constructor(canvasEl, overlayEl, textLayerEl, stageEl) {
     this.canvas = canvasEl;
     this.ctx = canvasEl.getContext("2d");
     this.overlay = overlayEl;
     this.octx = overlayEl.getContext("2d");
     this.textLayer = textLayerEl;
+    this.stage = stageEl; // 확대/축소 변환이 적용되는 래퍼(펜/터치 좌표 계산에는 영향 없음)
 
     this.note = null;
     this.tool = "pen-fountain";
@@ -21,6 +22,18 @@ class InkEngine {
     this.selection = { strokeIds: new Set(), textIds: new Set() };
     this.dragStart = null;
     this.dragOrigPositions = null;
+    this.selectedTextBoxId = null; // 클릭으로 선택된 텍스트박스 (이동/크기조절 대상)
+    this.editingTextId = null; // 더블클릭으로 편집(타이핑) 중인 텍스트박스
+
+    // 팜 리젝션 / 핀치줌 상태
+    this.penActive = false; // Apple Pencil 등 펜이 현재 눌려있는지
+    this.activeTouches = new Map(); // pointerId -> {x,y} (touch만)
+    this.pinchActive = false;
+    this.pinchStart = null;
+    this.zoom = 1;
+    this.panX = 0;
+    this.panY = 0;
+    this.onZoomChange = null; // callback(zoom)
 
     this.groupTimers = new Map(); // groupId -> timeout
     this.lastGroupId = null;
@@ -40,9 +53,26 @@ class InkEngine {
     this.note = note;
     this.selection.strokeIds.clear();
     this.selection.textIds.clear();
+    this.selectedTextBoxId = null;
+    this.editingTextId = null;
     this.undoStack = [];
     this.redoStack = [];
+    this.resetZoom();
     this.redrawAll();
+  }
+
+  resetZoom() {
+    this.zoom = 1;
+    this.panX = 0;
+    this.panY = 0;
+    this._applyZoomTransform();
+  }
+
+  _applyZoomTransform() {
+    if (this.stage) {
+      this.stage.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`;
+    }
+    if (this.onZoomChange) this.onZoomChange(this.zoom);
   }
 
   resize(w, h) {
@@ -92,7 +122,12 @@ class InkEngine {
     const rect = this.canvas.getBoundingClientRect();
     const cx = e.touches ? e.touches[0].clientX : e.clientX;
     const cy = e.touches ? e.touches[0].clientY : e.clientY;
-    return { x: cx - rect.left, y: cy - rect.top };
+    // rect는 확대/축소(transform: scale) 이후의 화면상 크기이므로, 캔버스 내부 실제
+    // 해상도(this.canvas.width/height) 비율로 환산해야 줌 상태와 무관하게 정확한 좌표가 나옵니다.
+    return {
+      x: (cx - rect.left) * (this.canvas.width / rect.width),
+      y: (cy - rect.top) * (this.canvas.height / rect.height),
+    };
   }
 
   // ---------- 이벤트 바인딩 ----------
@@ -101,20 +136,107 @@ class InkEngine {
     el.addEventListener("pointerdown", (e) => this._pointerDown(e));
     window.addEventListener("pointermove", (e) => this._pointerMove(e));
     window.addEventListener("pointerup", (e) => this._pointerUp(e));
+    window.addEventListener("pointercancel", (e) => this._pointerUp(e));
     window.addEventListener("keydown", (e) => {
       if ((e.key === "Delete" || e.key === "Backspace") && document.activeElement.tagName !== "INPUT" &&
           !document.activeElement.classList.contains("text-el")) {
         if (this.selection.strokeIds.size || this.selection.textIds.size) {
           e.preventDefault();
           this.deleteSelection();
+        } else if (this.selectedTextBoxId && !this.editingTextId) {
+          e.preventDefault();
+          this.snapshot();
+          this.note.texts = this.note.texts.filter((t) => t.id !== this.selectedTextBoxId);
+          this.selectedTextBoxId = null;
+          this.redrawAll();
+          this._fireChange();
         }
       }
     });
   }
 
+  // ---------- 팜 리젝션 / 핀치줌 게이팅 ----------
+  // 실제 그리기 로직(_handleDrawPointerDown)으로 넘기기 전에, 입력이 펜인지/터치인지에
+  // 따라 걸러냅니다: 펜 사용 중엔 터치를 전부 무시(팜 리젝션), 터치가 2개 이상이면
+  // 그리기 대신 핀치줌으로 처리합니다.
   _pointerDown(e) {
     if (!this.note) return;
+
+    if (e.pointerType === "pen") {
+      this.penActive = true;
+      this._handleDrawPointerDown(e);
+      return;
+    }
+
+    if (e.pointerType === "touch") {
+      if (this.penActive) return; // 펜으로 쓰는 중엔 손바닥 등 터치를 무시
+
+      this.activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (this.activeTouches.size === 1) {
+        this._handleDrawPointerDown(e); // 손가락 한 개 = 필기로 간주
+        return;
+      }
+      if (this.activeTouches.size === 2) {
+        this._cancelInProgressStroke(); // 방금 손가락 하나로 시작됐던 획은 취소
+        this._startPinch();
+        return;
+      }
+      return; // 손가락 3개 이상은 무시
+    }
+
+    this._handleDrawPointerDown(e); // 마우스 등
+  }
+
+  _cancelInProgressStroke() {
+    if (this.currentStroke) {
+      this.note.strokes = this.note.strokes.filter((s) => s !== this.currentStroke);
+      this.currentStroke = null;
+    }
+    this.lassoPoints = null;
+    this.dragStart = null;
+    this.drawing = false;
+    this._clearOverlay();
+    this.redrawAll();
+  }
+
+  _startPinch() {
+    const pts = Array.from(this.activeTouches.values());
+    const [a, b] = pts;
+    this.pinchActive = true;
+    this.pinchStart = {
+      dist: Math.hypot(b.x - a.x, b.y - a.y),
+      midX: (a.x + b.x) / 2,
+      midY: (a.y + b.y) / 2,
+      zoom: this.zoom,
+      panX: this.panX,
+      panY: this.panY,
+    };
+  }
+
+  _updatePinch() {
+    const pts = Array.from(this.activeTouches.values());
+    const [a, b] = pts;
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    const midX = (a.x + b.x) / 2;
+    const midY = (a.y + b.y) / 2;
+    const s = this.pinchStart;
+
+    this.zoom = Math.min(4, Math.max(0.5, s.zoom * (dist / s.dist)));
+    this.panX = s.panX + (midX - s.midX);
+    this.panY = s.panY + (midY - s.midY);
+    this._applyZoomTransform();
+  }
+
+  _handleDrawPointerDown(e) {
     const p = this._getPos(e);
+
+    // 캔버스(빈 공간)를 클릭하면 선택된/편집 중이던 텍스트박스는 해제
+    if (this.selectedTextBoxId || this.editingTextId) {
+      this.selectedTextBoxId = null;
+      this.editingTextId = null;
+      this.redrawAll();
+    }
 
     if (this.tool === "lasso") {
       // 이미 선택된 영역 안을 클릭하면 드래그 이동 시작
@@ -161,6 +283,18 @@ class InkEngine {
   }
 
   _pointerMove(e) {
+    if (e.pointerType === "touch") {
+      if (this.penActive) return; // 팜 리젝션: 펜 사용 중엔 손가락 입력 무시
+
+      if (this.activeTouches.has(e.pointerId)) {
+        this.activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+      if (this.activeTouches.size >= 2) {
+        if (this.pinchActive) this._updatePinch();
+        return; // 손가락이 2개 이상이면 그리기는 절대 진행하지 않음
+      }
+    }
+
     if (!this.drawing || !this.note) return;
     const p = this._getPos(e);
 
@@ -189,6 +323,18 @@ class InkEngine {
   }
 
   _pointerUp(e) {
+    if (e.pointerType === "pen") {
+      this.penActive = false;
+    }
+    if (e.pointerType === "touch") {
+      this.activeTouches.delete(e.pointerId);
+      if (this.activeTouches.size < 2) {
+        this.pinchActive = false;
+        this.pinchStart = null;
+      }
+      if (this.activeTouches.size > 0) return; // 손가락이 아직 남아있으면(핀치 종료 등) 그리기 마무리 로직은 건너뜀
+    }
+
     if (!this.note) return;
 
     if (this.tool === "lasso") {
@@ -480,23 +626,133 @@ class InkEngine {
   _renderTextLayer() {
     this.textLayer.innerHTML = "";
     for (const t of this.note.texts) {
-      const div = document.createElement("div");
-      div.className = "text-el";
-      div.contentEditable = "true";
-      div.spellcheck = false;
-      div.style.left = t.x + "px";
-      div.style.top = t.y + "px";
-      div.style.minWidth = t.w + "px";
-      div.style.color = t.color;
-      div.style.fontFamily = t.fontFamily;
-      div.style.fontSize = t.fontSize + "px";
-      div.textContent = t.text;
-      div.addEventListener("input", () => {
-        t.text = div.textContent;
+      const isEditing = this.editingTextId === t.id;
+      const isSelected = this.selectedTextBoxId === t.id;
+
+      const box = document.createElement("div");
+      box.className = "text-box" + (isSelected ? " selected" : "") + (isEditing ? " editing" : "");
+      box.style.left = t.x + "px";
+      box.style.top = t.y + "px";
+      box.style.width = t.w + "px";
+      box.style.height = t.h + "px";
+
+      const content = document.createElement("div");
+      content.className = "text-el";
+      content.contentEditable = isEditing ? "true" : "false";
+      content.spellcheck = false;
+      content.style.color = t.color;
+      content.style.fontFamily = t.fontFamily;
+      content.style.fontSize = t.fontSize + "px";
+      content.textContent = t.text;
+      content.addEventListener("input", () => {
+        t.text = content.textContent;
         this._fireChange();
       });
-      div.addEventListener("pointerdown", (e) => e.stopPropagation());
-      this.textLayer.appendChild(div);
+      content.addEventListener("blur", () => {
+        if (this.editingTextId === t.id) {
+          this.editingTextId = null;
+          this.redrawAll();
+          this._fireChange();
+        }
+      });
+      content.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        this._enterTextEditMode(t.id);
+      });
+      box.appendChild(content);
+
+      const handle = document.createElement("div");
+      handle.className = "resize-handle";
+      box.appendChild(handle);
+
+      box.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        if (e.target === handle) {
+          this._startResizeText(t, e);
+          return;
+        }
+        if (isEditing) return; // 편집 중이면 평소처럼 클릭해서 커서 위치 이동
+        this._selectTextBox(t.id);
+        this._startDragText(t, e);
+      });
+
+      this.textLayer.appendChild(box);
     }
+
+    if (this.editingTextId) {
+      const el = this.textLayer.querySelector(".text-box.editing .text-el");
+      if (el) {
+        el.focus();
+        this._placeCaretAtEnd(el);
+      }
+    }
+  }
+
+  _selectTextBox(id) {
+    if (this.selectedTextBoxId === id && !this.editingTextId) return; // 이미 선택돼 있으면 다시 그리지 않음(더블클릭 인식 보존)
+    this.selectedTextBoxId = id;
+    this.editingTextId = null;
+    this.redrawAll();
+  }
+
+  _enterTextEditMode(id) {
+    this.selectedTextBoxId = null;
+    this.editingTextId = id;
+    this.redrawAll();
+  }
+
+  _placeCaretAtEnd(el) {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  _startDragText(t, e) {
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const origX = t.x;
+    const origY = t.y;
+    let moved = false;
+    const onMove = (ev) => {
+      if (!moved) { this.snapshot(); moved = true; }
+      t.x = origX + (ev.clientX - startX);
+      t.y = origY + (ev.clientY - startY);
+      this.redrawAll();
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      if (moved) this._fireChange();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  _startResizeText(t, e) {
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const origW = t.w;
+    const origH = t.h;
+    const origFont = t.fontSize;
+    let moved = false;
+    const onMove = (ev) => {
+      if (!moved) { this.snapshot(); moved = true; }
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      t.w = Math.max(24, origW + dx);
+      t.h = Math.max(14, origH + dy);
+      t.fontSize = Math.max(8, origFont * (t.h / origH));
+      this.redrawAll();
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      if (moved) this._fireChange();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   }
 }

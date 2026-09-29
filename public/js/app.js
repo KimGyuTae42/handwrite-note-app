@@ -90,12 +90,15 @@ function applyNoteTemplate(noteId) {
   if (!note.texts) note.texts = [];
 
   const tmpl = state.templates.find((t) => t.id === note.templateId);
+  const stage = document.getElementById("canvas-stage");
   const bgImg = document.getElementById("template-bg");
   const ink = document.getElementById("ink-canvas");
   const lasso = document.getElementById("lasso-overlay");
   const textLayer = document.getElementById("text-layer");
 
   const applySize = (w, h) => {
+    stage.style.width = w + "px";
+    stage.style.height = h + "px";
     [bgImg, textLayer].forEach((el) => {
       el.style.width = w + "px";
       el.style.height = h + "px";
@@ -739,7 +742,8 @@ function initEngine() {
   engine = new InkEngine(
     document.getElementById("ink-canvas"),
     document.getElementById("lasso-overlay"),
-    document.getElementById("text-layer")
+    document.getElementById("text-layer"),
+    document.getElementById("canvas-stage")
   );
   engine.tool = "pen-fountain";
   engine.color = PALETTE[0];
@@ -747,17 +751,44 @@ function initEngine() {
 
   engine.onChange = () => scheduleSync();
 
+  engine.onZoomChange = (z) => {
+    const pill = document.getElementById("zoom-pill");
+    if (Math.abs(z - 1) < 0.01) {
+      pill.classList.add("hidden");
+    } else {
+      pill.classList.remove("hidden");
+      pill.textContent = Math.round(z * 100) + "%";
+    }
+  };
+  document.getElementById("zoom-pill").addEventListener("click", () => engine.resetZoom());
+
   engine.onGroupReady = async (groupId) => {
     const bbox = engine.groupBBox(groupId);
     if (!bbox) return;
     showOcrStatus();
     try {
-      const { text, confidence } = await recognizeCanvasRegion(engine.canvas, bbox);
       const threshold = state.settings.threshold || 80;
-      if (text && confidence >= threshold) {
+      let result = null;
+
+      // 1순위: 직접 학습한 CNN (한글 자모/영문/숫자/기호에 특화)
+      if (cnnModel) {
+        try {
+          result = await recognizeWithCNN(engine.canvas, bbox);
+        } catch (e) {
+          console.error("CNN 인식 오류:", e);
+        }
+      }
+
+      // CNN이 없거나 신뢰도가 낮으면 Tesseract(범용 OCR)로 한 번 더 시도해서 더 나은 쪽 채택
+      if (!result || !result.text || result.confidence < threshold) {
+        const fallback = await recognizeCanvasRegion(engine.canvas, bbox);
+        if (!result || fallback.confidence > result.confidence) result = fallback;
+      }
+
+      if (result && result.text && result.confidence >= threshold) {
         const fontDef = state.fonts.find((f) => f.id === state.settings.defaultFontId);
         const fontFamily = fontDef ? `"${fontDef.family}", sans-serif` : "inherit";
-        engine.replaceGroupWithText(groupId, text, fontFamily);
+        engine.replaceGroupWithText(groupId, result.text, fontFamily);
       } else {
         engine.keepGroupAsInk(groupId);
       }
@@ -968,6 +999,7 @@ function renderAll() {
 // ---------- 초기화 ----------
 document.addEventListener("DOMContentLoaded", () => {
   loadBundledFonts();
+  initCNN();
 
   // 목록 화면
   document.getElementById("back-btn").addEventListener("click", goBackFolder);
