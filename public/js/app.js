@@ -174,7 +174,14 @@ async function loadUserData() {
 
   if (error) {
     console.error("불러오기 실패:", error);
-    alert("데이터를 불러오지 못했습니다. supabase/schema.sql을 SQL Editor에서 실행했는지 확인해주세요.");
+    alert(
+      "데이터를 불러오지 못했습니다.\n\n" +
+      "[오류 코드] " + (error.code || "없음") + "\n" +
+      "[오류 메시지] " + (error.message || String(error)) + "\n\n" +
+      "code가 42P01이면 → supabase/schema.sql을 아직 실행 안 한 것 (SQL Editor에서 실행)\n" +
+      "message에 permission/RLS 언급 있으면 → schema.sql의 정책(policy) 부분이 제대로 실행됐는지 확인\n" +
+      "그 외의 경우 → .env(.local)의 URL/키가 이 Supabase 프로젝트 것이 맞는지 확인"
+    );
     state.folders = defaultFolders();
     state.notes = [];
   } else if (data && data.data) {

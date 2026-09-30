@@ -124,9 +124,13 @@ class InkEngine {
     const cy = e.touches ? e.touches[0].clientY : e.clientY;
     // rect는 확대/축소(transform: scale) 이후의 화면상 크기이므로, 캔버스 내부 실제
     // 해상도(this.canvas.width/height) 비율로 환산해야 줌 상태와 무관하게 정확한 좌표가 나옵니다.
+    // pressure: Apple Pencil/S Pen처럼 실제 필압을 지원하는 기기는 0~1 사이 값을 주고,
+    // 마우스/무압력 터치는 눌려있는 동안 0.5로 고정된 값을 줍니다(Pointer Events 스펙).
+    const pressure = typeof e.pressure === "number" ? e.pressure : 0.5;
     return {
       x: (cx - rect.left) * (this.canvas.width / rect.width),
       y: (cy - rect.top) * (this.canvas.height / rect.height),
+      pressure,
     };
   }
 
@@ -155,6 +159,16 @@ class InkEngine {
     });
   }
 
+  // 터치 접촉 면적(CSS px 기준)이 이보다 크면 손가락이 아니라 손바닥일 가능성이 높다고 보고 무시합니다.
+  // (기기마다 편차가 있어 보수적으로 잡은 값 - 필요하면 조정 가능)
+  static PALM_CONTACT_THRESHOLD = 70;
+
+  _looksLikePalm(e) {
+    const w = e.width || 0;
+    const h = e.height || 0;
+    return Math.max(w, h) > InkEngine.PALM_CONTACT_THRESHOLD;
+  }
+
   // ---------- 팜 리젝션 / 핀치줌 게이팅 ----------
   // 실제 그리기 로직(_handleDrawPointerDown)으로 넘기기 전에, 입력이 펜인지/터치인지에
   // 따라 걸러냅니다: 펜 사용 중엔 터치를 전부 무시(팜 리젝션), 터치가 2개 이상이면
@@ -170,6 +184,10 @@ class InkEngine {
 
     if (e.pointerType === "touch") {
       if (this.penActive) return; // 펜으로 쓰는 중엔 손바닥 등 터치를 무시
+
+      if (this.activeTouches.size === 0 && this._looksLikePalm(e)) {
+        return; // 첫 접촉부터 접촉 면적이 비정상적으로 크면(손바닥 추정) 아예 무시
+      }
 
       this.activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
@@ -277,6 +295,7 @@ class InkEngine {
       points: [p],
       groupId,
       converted: false,
+      pointerType: e.pointerType, // "pen"이면 필압 기반으로 두께를 다르게 그림
     };
     this.note.strokes.push(this.currentStroke);
     this._drawStroke(this.currentStroke);
@@ -312,14 +331,33 @@ class InkEngine {
     }
 
     if (this.tool === "eraser") {
-      this.eraseAt(p.x, p.y, this.width * 2);
+      // getCoalescedEvents: 브라우저가 화면 주사율에 맞춰 pointermove를 줄여 보내더라도,
+      // 펜/터치 하드웨어가 실제로 감지한 중간 지점들을 전부 받아와서 빠르게 지울 때 빈틈이 안 생기게 함
+      for (const ev of this._eventsFor(e)) {
+        const pp = this._getPos(ev);
+        this.eraseAt(pp.x, pp.y, this.width * 2);
+      }
       return;
     }
 
     if (this.currentStroke) {
-      this.currentStroke.points.push(p);
+      // 위와 같은 이유로, 실제 하드웨어 샘플을 전부 점으로 남겨야 (특히 빠르게 휘갈겨 쓸 때)
+      // 선이 뚝뚝 끊기지 않고 부드럽게 이어집니다. (Apple Pencil, S Pen 모두 지원)
+      for (const ev of this._eventsFor(e)) {
+        this.currentStroke.points.push(this._getPos(ev));
+      }
       this.redrawAll(); // 단순하지만 안정적인 재렌더링
     }
+  }
+
+  // pointermove 이벤트 하나에 딸려온(브라우저가 합쳐 보낸) 실제 하드웨어 샘플들을 꺼내옵니다.
+  // 지원 안 하는 브라우저에서는 이벤트 자기 자신만 담긴 배열을 돌려줍니다.
+  _eventsFor(e) {
+    if (typeof e.getCoalescedEvents === "function") {
+      const list = e.getCoalescedEvents();
+      if (list && list.length) return list;
+    }
+    return [e];
   }
 
   _pointerUp(e) {
@@ -584,18 +622,41 @@ class InkEngine {
   // ---------- 렌더링 ----------
   _drawStroke(s) {
     const ctx = this.ctx;
-    if (s.points.length < 2) return;
+    const pts = s.points;
+    if (pts.length < 2) return;
     ctx.save();
     ctx.globalAlpha = s.opacity;
     ctx.strokeStyle = s.color;
-    ctx.lineWidth = s.width;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     if (s.tool === "highlighter") ctx.globalCompositeOperation = "multiply";
-    ctx.beginPath();
-    ctx.moveTo(s.points[0].x, s.points[0].y);
-    for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
-    ctx.stroke();
+
+    if (s.pointerType === "pen") {
+      // Apple Pencil / S Pen: 구간마다 필압(pressure)에 따라 두께를 다르게 그려서
+      // 진짜 손글씨처럼 힘 주는 대로 굵기가 변하게 함
+      for (let i = 1; i < pts.length; i++) {
+        const p0 = pts[i - 1], p1 = pts[i];
+        const pressure = ((p0.pressure ?? 0.5) + (p1.pressure ?? 0.5)) / 2;
+        ctx.lineWidth = Math.max(0.6, s.width * (0.4 + pressure));
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+      }
+    } else {
+      // 마우스/일반 터치: 점들을 부드러운 곡선(2차 베지어)으로 이어서 각져 보이지 않게 함
+      ctx.lineWidth = s.width;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length - 1; i++) {
+        const midX = (pts[i].x + pts[i + 1].x) / 2;
+        const midY = (pts[i].y + pts[i + 1].y) / 2;
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
+      }
+      ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+      ctx.stroke();
+    }
+
     ctx.restore();
   }
 
