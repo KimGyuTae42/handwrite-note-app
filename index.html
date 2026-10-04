@@ -105,12 +105,27 @@
     </div>
     <div class="canvas-wrap" id="canvas-wrap">
       <div class="pill tools-pill" id="tools-pill">
-        <button class="tool-btn" data-tool="pen-fountain" title="만년필">🖊️</button>
-        <button class="tool-btn" data-tool="pen-brush" title="붓">🖌️</button>
-        <button class="tool-btn" data-tool="highlighter" title="하이라이터">🖍️</button>
-        <button class="tool-btn" data-tool="eraser" title="지우개">🧹</button>
-        <button class="tool-btn" data-tool="lasso" title="올가미">◯</button>
-        <button class="tool-btn" data-tool="select" title="선택">↖</button>
+        <button class="tool-btn" data-tool="pen-fountain" title="만년필">
+          <svg viewBox="0 0 24 24"><polygon points="4,20 4,16.5 14.5,6 18.5,10 8,20.5" /></svg>
+        </button>
+        <button class="tool-btn" data-tool="pen-brush" title="붓">
+          <svg viewBox="0 0 24 24"><polygon points="9,21 7,19 8,16 15,9 18,12 11,19" /></svg>
+        </button>
+        <button class="tool-btn" data-tool="highlighter" title="하이라이터">
+          <svg viewBox="0 0 24 24"><polygon points="5,20 5,17 14,8 18,12 9,21" /></svg>
+        </button>
+        <button class="tool-btn" data-tool="eraser" title="지우개">
+          <svg viewBox="0 0 24 24"><rect x="6" y="9" width="12" height="10" rx="2.5" /></svg>
+        </button>
+        <button class="tool-btn" data-tool="lasso" title="올가미">
+          <svg viewBox="0 0 24 24">
+            <ellipse class="lasso-loop" cx="12" cy="11" rx="8" ry="6" stroke-dasharray="2.6 2.6" />
+            <circle cx="12" cy="18.5" r="1.4" />
+          </svg>
+        </button>
+        <button class="tool-btn" data-tool="select" title="선택">
+          <svg viewBox="0 0 24 24"><polygon points="5,3 5,19 9.5,15.5 12.5,21 15,19.7 12,14.2 18,14" /></svg>
+        </button>
         <span class="pill-sep"></span>
         <button class="icon-only" id="convert-btn" title="지금 변환">✨</button>
         <button class="icon-only" id="export-btn" title="내보내기">⇪</button>

@@ -134,6 +134,16 @@ button{font-family:inherit;cursor:pointer;}
 }
 .tools-pill .tool-btn.active{background:var(--accent);color:#fff;}
 .pill .icon-only:hover, .tools-pill .tool-btn:hover{background:#f0f1f4;}
+
+/* 도구 아이콘: 평소엔 윤곽선만, 선택되면 채워진 상태로 바뀜 */
+.tool-btn svg{width:19px;height:19px;overflow:visible;}
+.tool-btn svg *{
+  fill:none;stroke:currentColor;stroke-width:1.6;
+  stroke-linejoin:round;stroke-linecap:round;
+  transition:fill .12s ease;
+}
+.tool-btn.active svg *{fill:currentColor;}
+.tool-btn svg .lasso-loop{fill:none !important;} /* 올가미 테두리는 선택돼도 점선 윤곽선 유지 */
 .pill-sep{width:1px;height:20px;background:var(--border);margin:0 4px;}
 
 .style-pill .swatches{display:flex;gap:6px;}
