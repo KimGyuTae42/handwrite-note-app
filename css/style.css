@@ -118,6 +118,15 @@ button{font-family:inherit;cursor:pointer;}
 .tab .tab-close:hover{opacity:1;}
 .tabbar .icon-btn{background:#3d3f45;color:#fff;box-shadow:none;}
 
+.page-bar{
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  padding:8px 12px;background:#eef0f3;border-bottom:1px solid var(--border);font-size:13px;
+}
+.page-bar .icon-btn{width:28px;height:28px;font-size:14px;}
+.page-bar .icon-btn:disabled{opacity:.35;cursor:default;}
+#page-indicator{color:var(--muted);min-width:44px;text-align:center;}
+.page-bar .icon-btn.accent{background:var(--accent);color:#fff;width:auto;padding:0 12px;border-radius:14px;font-size:13px;}
+
 /* 떠있는 pill 스타일 툴바 (아이패드 노트앱 참고) */
 .pill{
   display:flex;align-items:center;gap:2px;background:#fff;border-radius:22px;
@@ -134,16 +143,6 @@ button{font-family:inherit;cursor:pointer;}
 }
 .tools-pill .tool-btn.active{background:var(--accent);color:#fff;}
 .pill .icon-only:hover, .tools-pill .tool-btn:hover{background:#f0f1f4;}
-
-/* 도구 아이콘: 평소엔 윤곽선만, 선택되면 채워진 상태로 바뀜 */
-.tool-btn svg{width:19px;height:19px;overflow:visible;}
-.tool-btn svg *{
-  fill:none;stroke:currentColor;stroke-width:1.6;
-  stroke-linejoin:round;stroke-linecap:round;
-  transition:fill .12s ease;
-}
-.tool-btn.active svg *{fill:currentColor;}
-.tool-btn svg .lasso-loop{fill:none !important;} /* 올가미 테두리는 선택돼도 점선 윤곽선 유지 */
 .pill-sep{width:1px;height:20px;background:var(--border);margin:0 4px;}
 
 .style-pill .swatches{display:flex;gap:6px;}

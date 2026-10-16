@@ -83,13 +83,83 @@ function gridPaperDataUri() {
 }
 
 // ---------- 노트 캔버스에 템플릿 배경 적용 (실제 이미지 크기에 맞춰 캔버스 크기도 조정) ----------
+// ---------- 멀티 페이지 ----------
+// 노트 하나는 여러 페이지(note.pages)를 가질 수 있고, 각 페이지가 자기 템플릿/필기/텍스트를 가집니다.
+// (예전 형식 - 노트에 templateId/strokes/texts가 바로 붙어있던 것 - 은 1페이지짜리로 자동 변환)
+function migrateNote(note) {
+  if (!Array.isArray(note.pages) || note.pages.length === 0) {
+    note.pages = [{
+      id: uid(),
+      templateId: note.templateId || state.settings.defaultTemplateId,
+      strokes: note.strokes || [],
+      texts: note.texts || [],
+    }];
+    delete note.templateId;
+    delete note.strokes;
+    delete note.texts;
+  }
+  note.pages.forEach((p) => {
+    if (!p.id) p.id = uid();
+    if (!p.strokes) p.strokes = [];
+    if (!p.texts) p.texts = [];
+  });
+  if (typeof note.activePageIndex !== "number" || note.activePageIndex < 0 || note.activePageIndex >= note.pages.length) {
+    note.activePageIndex = 0;
+  }
+  return note;
+}
+
+function currentPageOf(note) {
+  migrateNote(note);
+  return note.pages[note.activePageIndex];
+}
+
+function renderPageBar() {
+  const note = state.notes.find((n) => n.id === state.activeNoteId);
+  if (!note) return;
+  migrateNote(note);
+  document.getElementById("page-indicator").textContent = `${note.activePageIndex + 1} / ${note.pages.length}`;
+  document.getElementById("prev-page-btn").disabled = note.activePageIndex === 0;
+  document.getElementById("next-page-btn").disabled = note.activePageIndex === note.pages.length - 1;
+}
+
+function gotoPage(delta) {
+  const note = state.notes.find((n) => n.id === state.activeNoteId);
+  if (!note) return;
+  migrateNote(note);
+  const next = note.activePageIndex + delta;
+  if (next < 0 || next >= note.pages.length) return;
+  note.activePageIndex = next;
+  applyNoteTemplate(note.id);
+  renderPageBar();
+  scheduleSync();
+}
+
+// 지금 보고 있는 페이지 "바로 뒤"에 같은 템플릿의 빈 페이지를 끼워 넣고 그 페이지로 이동
+function addBlankPageAfterCurrent() {
+  const note = state.notes.find((n) => n.id === state.activeNoteId);
+  if (!note) return;
+  const cur = currentPageOf(note);
+  const page = { id: uid(), templateId: cur.templateId, strokes: [], texts: [] };
+  note.pages.splice(note.activePageIndex + 1, 0, page);
+  note.activePageIndex += 1;
+  applyNoteTemplate(note.id);
+  renderPageBar();
+  scheduleSync();
+}
+
+function initPageBar() {
+  document.getElementById("prev-page-btn").addEventListener("click", () => gotoPage(-1));
+  document.getElementById("next-page-btn").addEventListener("click", () => gotoPage(1));
+  document.getElementById("add-page-btn").addEventListener("click", addBlankPageAfterCurrent);
+}
+
 function applyNoteTemplate(noteId) {
   const note = state.notes.find((n) => n.id === noteId);
   if (!note) return;
-  if (!note.strokes) note.strokes = [];
-  if (!note.texts) note.texts = [];
+  const page = currentPageOf(note);
 
-  const tmpl = state.templates.find((t) => t.id === note.templateId);
+  const tmpl = state.templates.find((t) => t.id === page.templateId);
   const stage = document.getElementById("canvas-stage");
   const bgImg = document.getElementById("template-bg");
   const ink = document.getElementById("ink-canvas");
@@ -113,14 +183,14 @@ function applyNoteTemplate(noteId) {
   if (tmpl && tmpl.img) {
     bgImg.onload = () => {
       applySize(bgImg.naturalWidth, bgImg.naturalHeight);
-      if (engine) engine.setNote(note);
+      if (engine) engine.setNote(page);
     };
     bgImg.src = tmpl.img;
   } else {
     bgImg.onload = null;
     bgImg.src = gridPaperDataUri();
     applySize(1000, 1400);
-    if (engine) engine.setNote(note);
+    if (engine) engine.setNote(page);
   }
 }
 
@@ -128,6 +198,7 @@ function activateNote(id) {
   state.activeNoteId = id;
   renderTabs();
   applyNoteTemplate(id);
+  renderPageBar();
 }
 
 // ============ 로그인 / 계정별 저장·동기화 (Supabase) ============
@@ -187,7 +258,7 @@ async function loadUserData() {
   } else if (data && data.data) {
     const d = data.data;
     state.folders = d.folders && d.folders.length ? d.folders : defaultFolders();
-    state.notes = d.notes || [];
+    state.notes = (d.notes || []).map(migrateNote);
     state.templates = [...BUNDLED_TEMPLATES, ...(d.templates || [])];
     state.fonts = [...BUNDLED_FONTS.map((f) => ({ id: f.id, name: f.name, family: f.family })), ...(d.fonts || [])];
     state.settings = { ...state.settings, ...(d.settings || {}) };
@@ -527,7 +598,7 @@ function openChoiceModal() {
     overlay.remove();
     const result = await newNoteModal();
     if (result) {
-      const note = { id: uid(), name: result.name, folderId: state.currentFolderId, trashed: false, templateId: result.templateId, strokes: [], texts: [] };
+      const note = { id: uid(), name: result.name, folderId: state.currentFolderId, trashed: false, pages: [{ id: uid(), templateId: result.templateId, strokes: [], texts: [] }], activePageIndex: 0 };
       state.notes.push(note);
       state.expanded.add(state.currentFolderId);
       renderAll();
@@ -772,6 +843,7 @@ function initEngine() {
   engine.onGroupReady = async (groupId) => {
     const bbox = engine.groupBBox(groupId);
     if (!bbox) return;
+    const pageAtStart = engine.note; // 인식하는 동안 다른 페이지로 넘어가면 결과를 버림
     showOcrStatus();
     try {
       const threshold = state.settings.threshold || 80;
@@ -792,6 +864,7 @@ function initEngine() {
         if (!result || fallback.confidence > result.confidence) result = fallback;
       }
 
+      if (engine.note !== pageAtStart) return;
       if (result && result.text && result.confidence >= threshold) {
         const fontDef = state.fonts.find((f) => f.id === state.settings.defaultFontId);
         const fontFamily = fontDef ? `"${fontDef.family}", sans-serif` : "inherit";
@@ -1035,6 +1108,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("home-btn").addEventListener("click", () => switchView("list"));
   initEngine();
   initToolbar();
+  initPageBar();
 
   initAuth();
 });

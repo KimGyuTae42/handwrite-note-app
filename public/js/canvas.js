@@ -50,6 +50,13 @@ class InkEngine {
   }
 
   setNote(note) {
+    // 다른 페이지/노트로 넘어가면 이전 페이지에서 대기 중이던 인식 타이머와 묶음 정보는 버림
+    this.groupTimers.forEach((t) => clearTimeout(t));
+    this.groupTimers.clear();
+    this.lastGroupId = null;
+    this.lastStrokeBBox = null;
+    this.currentStroke = null;
+    this.drawing = false;
     this.note = note;
     this.selection.strokeIds.clear();
     this.selection.textIds.clear();
