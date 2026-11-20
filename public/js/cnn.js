@@ -97,7 +97,21 @@ async function recognizeWithCNN(sourceCanvas, bbox) {
   let text = "";
   let confSum = 0;
 
+  // 띄어쓰기 판단: 이 줄의 글자 간격 중앙값(=보통 글자 사이 간격)보다 훨씬 크고, 줄 높이에 비해서도
+  // 충분히 클 때만 공백으로 봄. (또박또박 띄어 쓴 글씨에 글자마다 공백이 끼지 않도록)
+  const gaps = [];
+  for (let i = 1; i < glyphBoxes.length; i++) {
+    gaps.push(glyphBoxes[i].x - (glyphBoxes[i - 1].x + glyphBoxes[i - 1].w));
+  }
+  const sorted = gaps.slice().sort((a, b) => a - b);
+  const medianGap = sorted.length >= 2 ? sorted[Math.floor((sorted.length - 1) / 2)] : 0; // 간격이 적을 땐 작은 쪽 중앙값(단어 사이 큰 간격에 끌려가지 않게)
+  const lineH = glyphBoxes[0].h;
+  const spaceThreshold = Math.max(lineH * 0.8, medianGap * 2.2);
+
+  let prev = null;
   for (const g of glyphBoxes) {
+    if (prev && g.x - (prev.x + prev.w) > spaceThreshold) text += " ";
+    prev = g;
     const off = document.createElement("canvas");
     off.width = size;
     off.height = size;

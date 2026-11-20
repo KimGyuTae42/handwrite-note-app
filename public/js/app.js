@@ -788,32 +788,32 @@ function initToolbar() {
   document.getElementById("undo-btn").addEventListener("click", () => engine && engine.undo());
   document.getElementById("redo-btn").addEventListener("click", () => engine && engine.redo());
 
-  document.getElementById("convert-btn").addEventListener("click", () => {
-    if (!engine) return;
-    const n = engine.convertAllPending();
-    if (n === 0) flashOcrStatus("변환할 손글씨가 없어요");
-  });
-}
-
-function flashOcrStatus(msg) {
-  const el = document.getElementById("ocr-status");
-  el.textContent = msg;
-  el.classList.remove("hidden");
-  setTimeout(() => { el.classList.add("hidden"); el.textContent = "인식 중…"; }, 1200);
+  document.getElementById("convert-btn").addEventListener("click", recognizeAll);
+  document.getElementById("export-btn").addEventListener("click", openExportModal);
 }
 
 // ---------- 필기 엔진 + 손글씨 인식 연결 ----------
 let engine = null;
-let ocrActiveCount = 0;
+let recognizing = false;
+let ocrFlashTimer = null;
 
-function showOcrStatus() {
-  ocrActiveCount++;
-  document.getElementById("ocr-status").textContent = "인식 중…";
-  document.getElementById("ocr-status").classList.remove("hidden");
+function setOcrStatus(msg) {
+  clearTimeout(ocrFlashTimer);
+  const el = document.getElementById("ocr-status");
+  el.textContent = msg;
+  el.classList.remove("hidden");
 }
 function hideOcrStatus() {
-  ocrActiveCount = Math.max(0, ocrActiveCount - 1);
-  if (ocrActiveCount === 0) document.getElementById("ocr-status").classList.add("hidden");
+  document.getElementById("ocr-status").classList.add("hidden");
+}
+function flashOcrStatus(msg, ms = 2600) {
+  setOcrStatus(msg);
+  ocrFlashTimer = setTimeout(hideOcrStatus, ms);
+}
+
+function currentFontFamily() {
+  const fontDef = state.fonts.find((f) => f.id === state.settings.defaultFontId);
+  return fontDef ? `"${fontDef.family}", sans-serif` : "inherit";
 }
 
 function initEngine() {
@@ -826,6 +826,8 @@ function initEngine() {
   engine.tool = "pen-fountain";
   engine.color = PALETTE[0];
   engine.width = currentThickness;
+  engine.textFontSize = 28;
+  engine.getTextFont = currentFontFamily; // 텍스트 도구로 만든 상자도 설정에서 고른 글꼴 사용
 
   engine.onChange = () => scheduleSync();
 
@@ -839,46 +841,277 @@ function initEngine() {
     }
   };
   document.getElementById("zoom-pill").addEventListener("click", () => engine.resetZoom());
+}
 
-  engine.onGroupReady = async (groupId) => {
-    const bbox = engine.groupBBox(groupId);
-    if (!bbox) return;
-    const pageAtStart = engine.note; // 인식하는 동안 다른 페이지로 넘어가면 결과를 버림
-    showOcrStatus();
+// 한 묶음(한 줄)을 인식해서 텍스트로 바꿈. 바꿨으면 true.
+async function recognizeOneGroup(gid, threshold) {
+  const page = engine.note;
+  const img = engine.renderGroupImage(gid); // 이 묶음의 획만 깨끗하게 따로 그린 이미지
+  if (!img) return false;
+
+  let result = null;
+  // 1순위: 직접 학습한 CNN (한글 자모/영문/숫자/기호에 특화)
+  if (cnnModel) {
     try {
-      const threshold = state.settings.threshold || 80;
-      let result = null;
-
-      // 1순위: 직접 학습한 CNN (한글 자모/영문/숫자/기호에 특화)
-      if (cnnModel) {
-        try {
-          result = await recognizeWithCNN(engine.canvas, bbox);
-        } catch (e) {
-          console.error("CNN 인식 오류:", e);
-        }
-      }
-
-      // CNN이 없거나 신뢰도가 낮으면 Tesseract(범용 OCR)로 한 번 더 시도해서 더 나은 쪽 채택
-      if (!result || !result.text || result.confidence < threshold) {
-        const fallback = await recognizeCanvasRegion(engine.canvas, bbox);
-        if (!result || fallback.confidence > result.confidence) result = fallback;
-      }
-
-      if (engine.note !== pageAtStart) return;
-      if (result && result.text && result.confidence >= threshold) {
-        const fontDef = state.fonts.find((f) => f.id === state.settings.defaultFontId);
-        const fontFamily = fontDef ? `"${fontDef.family}", sans-serif` : "inherit";
-        engine.replaceGroupWithText(groupId, result.text, fontFamily);
-      } else {
-        engine.keepGroupAsInk(groupId);
-      }
+      result = await recognizeWithCNN(img.canvas, img.bbox);
     } catch (e) {
-      console.error("인식 오류:", e);
-      engine.keepGroupAsInk(groupId);
+      console.error("CNN 인식 오류:", e);
+    }
+  }
+  // CNN이 없거나 신뢰도가 낮으면 Tesseract(범용 OCR)로 한 번 더 시도해서 더 나은 쪽 채택
+  if (!result || !result.text || result.confidence < threshold) {
+    const fallback = await recognizeCanvasRegion(img.canvas, img.bbox);
+    if (!result || fallback.confidence > result.confidence) result = fallback;
+  }
+  if (engine.note !== page) return false; // 인식하는 동안 다른 페이지로 넘어갔으면 결과를 버림
+
+  if (result && result.text && result.text.trim() && result.confidence >= threshold) {
+    return engine.replaceGroupWithText(gid, result.text.trim(), currentFontFamily());
+  }
+  engine.keepGroupAsInk(gid, threshold); // 자신 없으면 손글씨 그대로
+  return false;
+}
+
+// "글씨 인식" 버튼: 지금까지 쓴 글씨를 한 번에 인식해서 변환
+async function recognizeAll() {
+  if (!engine || !engine.note || recognizing) return;
+  const threshold = state.settings.threshold || 80;
+  const page = engine.note;
+  const ids = engine.regroupPending(threshold);
+
+  if (!ids.length) {
+    const hasInk = page.strokes.some((s) => !s.converted && s.tool !== "highlighter");
+    flashOcrStatus(hasInk ? "새로 인식할 글씨가 없어요 (자신 없던 글씨는 손글씨 그대로 뒀어요)" : "인식할 손글씨가 없어요");
+    return;
+  }
+
+  recognizing = true;
+  const btn = document.getElementById("convert-btn");
+  btn.disabled = true;
+  let converted = 0;
+  try {
+    for (let i = 0; i < ids.length; i++) {
+      if (engine.note !== page) break;
+      setOcrStatus(`글씨 인식 중… ${i + 1}/${ids.length}`);
+      try {
+        if (await recognizeOneGroup(ids[i], threshold)) converted++;
+      } catch (e) {
+        console.error("인식 오류:", e);
+        engine.keepGroupAsInk(ids[i], threshold);
+      }
+    }
+  } finally {
+    recognizing = false;
+    btn.disabled = false;
+  }
+  const kept = ids.length - converted;
+  flashOcrStatus(`${converted}/${ids.length}개 변환 완료` + (kept ? ` · ${kept}개는 자신이 없어서 손글씨 그대로 뒀어요` : ""));
+}
+
+// ============ 내보내기 (PDF / Markdown) ============
+function safeFileName(name) {
+  return (name || "note").replace(/[\\/:*?"<>|]+/g, "_").trim() || "note";
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = () => reject(new Error("템플릿 이미지를 불러오지 못했어요"));
+    im.src = src;
+  });
+}
+
+// 텍스트박스를 캔버스에 그림 (화면의 텍스트박스와 같은 위치/크기/글꼴/색, 박스 안에서 줄바꿈)
+async function drawTextBoxOnCanvas(ctx, t) {
+  const family = !t.fontFamily || t.fontFamily === "inherit" ? "sans-serif" : t.fontFamily;
+  try { await document.fonts.load(`${t.fontSize}px ${family}`, t.text); } catch (e) { /* 폰트가 없으면 기본 글꼴로 */ }
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(t.x, t.y, t.w, t.h);
+  ctx.clip();
+  ctx.fillStyle = t.color;
+  ctx.font = `${t.fontSize}px ${family}`;
+  ctx.textBaseline = "top";
+  const maxW = Math.max(10, t.w - 6);
+  const lineH = t.fontSize * 1.15;
+  const lines = [];
+  for (const para of String(t.text).split("\n")) {
+    let line = "";
+    for (const token of para.split(/(\s+)/)) {
+      if (!token) continue;
+      if (ctx.measureText(line + token).width <= maxW || !line.trim()) {
+        line += token;
+        // 한 토큰이 박스보다 길면(한글 등 띄어쓰기 없는 글) 글자 단위로 끊음
+        while (ctx.measureText(line).width > maxW && line.length > 1) {
+          let cut = line.length - 1;
+          while (cut > 1 && ctx.measureText(line.slice(0, cut)).width > maxW) cut--;
+          lines.push(line.slice(0, cut));
+          line = line.slice(cut);
+        }
+      } else {
+        lines.push(line.trimEnd());
+        line = token.trim() ? token : "";
+      }
+    }
+    lines.push(line);
+  }
+  lines.forEach((ln, i) => ctx.fillText(ln, t.x + 3, t.y + 1 + i * lineH + (lineH - t.fontSize) / 2));
+  ctx.restore();
+}
+
+// 한 페이지(템플릿 + 필기 + 텍스트)를 한 장의 캔버스 이미지로 합침
+async function renderPageToCanvas(page) {
+  const tmpl = state.templates.find((t) => t.id === page.templateId);
+  const bg = await loadImage(tmpl && tmpl.img ? tmpl.img : gridPaperDataUri());
+  const canvas = document.createElement("canvas");
+  canvas.width = bg.naturalWidth || 1000;
+  canvas.height = bg.naturalHeight || 1400;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
+  // 화면과 같은 순서: 하이라이터를 먼저, 그 위에 펜
+  for (const s of page.strokes) if (s.tool === "highlighter") engine._drawStroke(s, ctx);
+  for (const s of page.strokes) if (s.tool !== "highlighter") engine._drawStroke(s, ctx);
+  for (const t of page.texts) if ((t.text || "").trim()) await drawTextBoxOnCanvas(ctx, t);
+  return canvas;
+}
+
+async function buildPdfBlob(pages) {
+  if (!window.jspdf) throw new Error("PDF 라이브러리(jsPDF)를 불러오지 못했어요. 인터넷 연결을 확인해주세요.");
+  const { jsPDF } = window.jspdf;
+  let doc = null;
+  for (const page of pages) {
+    const canvas = await renderPageToCanvas(page);
+    const orient = canvas.width >= canvas.height ? "l" : "p";
+    const fmt = [canvas.width, canvas.height];
+    if (!doc) doc = new jsPDF({ orientation: orient, unit: "px", format: fmt, hotfixes: ["px_scaling"] });
+    else doc.addPage(fmt, orient);
+    doc.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, canvas.width, canvas.height);
+  }
+  return doc.output("blob");
+}
+
+// 마크다운에서 글자가 서식으로 해석되지 않게 이스케이프
+function escapeMd(line) {
+  let out = line.replace(/([\\`*_{}\[\]<>#|~])/g, "\\$1");
+  out = out.replace(/^(\d+)([.)])/, "$1\\$2").replace(/^([-+])/, "\\$1");
+  return out;
+}
+
+// 한 페이지의 텍스트박스들을 읽는 순서(위→아래, 왼쪽→오른쪽)의 줄 목록으로
+function pageTextLines(page) {
+  const items = page.texts
+    .filter((t) => (t.text || "").trim())
+    .map((t) => ({ t, cy: t.y + t.h / 2, h: t.h }))
+    .sort((a, b) => a.cy - b.cy);
+  const rows = [];
+  for (const it of items) {
+    const last = rows[rows.length - 1];
+    if (last && Math.abs(it.cy - last.cy) < Math.min(it.h, last.h) * 0.6) {
+      last.items.push(it);
+      last.cy = last.items.reduce((sum, x) => sum + x.cy, 0) / last.items.length;
+    } else {
+      rows.push({ cy: it.cy, h: it.h, items: [it] });
+    }
+  }
+  return rows.map((r) =>
+    r.items
+      .sort((a, b) => a.t.x - b.t.x)
+      .map((i) => i.t.text.trim().split("\n").map(escapeMd).join("  \n"))
+      .join(" ")
+  );
+}
+
+function buildMarkdown(note, pages) {
+  const date = new Date().toLocaleDateString("ko-KR");
+  const out = [`# ${escapeMd(note.name)}`, "", `> 손글씨 인식 노트에서 내보냄 · ${date} · ${pages.length}페이지`, ""];
+  pages.forEach((page) => {
+    const no = note.pages.indexOf(page) + 1;
+    out.push(`## 페이지 ${no}`, "");
+    const lines = pageTextLines(page);
+    if (lines.length) out.push(lines.join("\n\n"), "");
+    else out.push("_(글자로 변환된 내용이 없어요)_", "");
+    if (page.strokes.some((s) => !s.converted && s.tool !== "highlighter")) {
+      out.push("> ※ 아직 글자로 변환되지 않은 손글씨가 있어요. (노트에서 **글씨 인식**을 누르면 변환돼요)", "");
+    }
+  });
+  return out.join("\n");
+}
+
+function openExportModal() {
+  const note = state.notes.find((n) => n.id === state.activeNoteId);
+  if (!note || !engine) return;
+  migrateNote(note);
+  const multi = note.pages.length > 1;
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-box">
+      <h3>내보내기</h3>
+      <p class="hint" style="margin-top:0">${escapeHtml(note.name)}</p>
+      ${multi ? `
+      <div class="export-scope">
+        <label><input type="radio" name="export-scope" value="all" checked /> 전체 ${note.pages.length}페이지</label>
+        <label><input type="radio" name="export-scope" value="current" /> 지금 보는 ${note.activePageIndex + 1}페이지만</label>
+      </div>` : ""}
+      <div class="export-choices">
+        <button class="btn primary" id="export-pdf">📄 PDF로 저장</button>
+        <button class="btn primary" id="export-md">📝 Markdown으로 저장</button>
+      </div>
+      <p class="hint" id="export-msg" style="min-height:18px;margin:10px 0 0"></p>
+      <div class="modal-actions"><button class="btn plain" id="export-close">닫기</button></div>
+    </div>`;
+  document.getElementById("modal-root").appendChild(overlay);
+
+  const msg = overlay.querySelector("#export-msg");
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector("#export-close").onclick = close;
+
+  const pickPages = () => {
+    const scope = overlay.querySelector('input[name="export-scope"]:checked');
+    return scope && scope.value === "current" ? [note.pages[note.activePageIndex]] : note.pages.slice();
+  };
+  const run = async (kind, btn) => {
+    const label = btn.textContent;
+    overlay.querySelectorAll(".export-choices .btn").forEach((b) => (b.disabled = true));
+    btn.textContent = "만드는 중…";
+    msg.style.color = "";
+    msg.textContent = "";
+    try {
+      const pages = pickPages();
+      const base = safeFileName(note.name);
+      if (kind === "pdf") {
+        downloadBlob(await buildPdfBlob(pages), `${base}.pdf`);
+      } else {
+        downloadBlob(new Blob([buildMarkdown(note, pages)], { type: "text/markdown;charset=utf-8" }), `${base}.md`);
+      }
+      msg.textContent = "저장했어요! 다운로드 폴더를 확인해주세요.";
+    } catch (e) {
+      console.error(e);
+      msg.style.color = "#e11d48";
+      msg.textContent = "저장하지 못했어요: " + e.message;
     } finally {
-      hideOcrStatus();
+      btn.textContent = label;
+      overlay.querySelectorAll(".export-choices .btn").forEach((b) => (b.disabled = false));
     }
   };
+  overlay.querySelector("#export-pdf").onclick = (e) => run("pdf", e.currentTarget);
+  overlay.querySelector("#export-md").onclick = (e) => run("md", e.currentTarget);
 }
 
 // ---------- 설정 화면 (시각적 UI만) ----------

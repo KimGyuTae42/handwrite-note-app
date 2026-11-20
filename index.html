@@ -111,29 +111,29 @@
     </div>
     <div class="canvas-wrap" id="canvas-wrap">
       <div class="pill tools-pill" id="tools-pill">
-        <button class="tool-btn" data-tool="pen-fountain" title="만년필">🖊️</button>
-        <button class="tool-btn" data-tool="pen-brush" title="붓">🖌️</button>
-        <button class="tool-btn" data-tool="highlighter" title="하이라이터">🖍️</button>
-        <button class="tool-btn" data-tool="eraser" title="지우개">🧹</button>
-        <button class="tool-btn" data-tool="lasso" title="올가미">◯</button>
-        <button class="tool-btn" data-tool="select" title="선택">↖</button>
+        <button class="tb tool-btn" data-tool="pen-fountain" title="만년필"><span class="ic">🖊️</span><span class="lb">만년필</span></button>
+        <button class="tb tool-btn" data-tool="pen-brush" title="붓"><span class="ic">🖌️</span><span class="lb">붓</span></button>
+        <button class="tb tool-btn" data-tool="highlighter" title="하이라이터"><span class="ic">🖍️</span><span class="lb">하이라이터</span></button>
+        <button class="tb tool-btn" data-tool="eraser" title="지우개"><span class="ic">🧹</span><span class="lb">지우개</span></button>
+        <button class="tb tool-btn" data-tool="lasso" title="올가미"><span class="ic">◯</span><span class="lb">올가미</span></button>
+        <button class="tb tool-btn" data-tool="text" title="텍스트 상자 추가"><span class="ic">🅣</span><span class="lb">텍스트</span></button>
+        <button class="tb tool-btn" data-tool="select" title="선택"><span class="ic">↖</span><span class="lb">선택</span></button>
         <span class="pill-sep"></span>
-        <button class="icon-only" id="convert-btn" title="지금 변환">✨</button>
-        <button class="icon-only" id="export-btn" title="내보내기">⇪</button>
-        <button class="icon-only" id="style-toggle-btn" title="색상/두께">›</button>
-      </div>
-      <div class="pill history-pill" id="history-pill">
-        <button class="icon-only" id="undo-btn" title="실행 취소">↺</button>
-        <button class="icon-only" id="redo-btn" title="다시 실행">↻</button>
+        <button class="tb action-btn" id="undo-btn" title="실행 취소"><span class="ic">↺</span><span class="lb">실행 취소</span></button>
+        <button class="tb action-btn" id="redo-btn" title="다시 실행"><span class="ic">↻</span><span class="lb">다시 실행</span></button>
+        <span class="pill-sep"></span>
+        <button class="tb action-btn recognize" id="convert-btn" title="쓴 글씨를 텍스트로 변환"><span class="ic">✨</span><span class="lb">글씨 인식</span></button>
+        <button class="tb action-btn" id="export-btn" title="PDF / Markdown으로 저장"><span class="ic">⇪</span><span class="lb">내보내기</span></button>
+        <button class="tb action-btn" id="style-toggle-btn" title="색상과 두께 열기/접기"><span class="ic">🎨</span><span class="lb">색·두께</span></button>
       </div>
       <div class="pill style-pill" id="style-pill">
+        <span class="pill-cap">색상</span>
         <div id="color-swatches" class="swatches"></div>
         <button class="swatch add-swatch" id="add-color-btn" title="색상 추가">＋</button>
         <input type="color" id="color-picker" class="color-picker-hidden" value="#111111" />
         <span class="pill-sep"></span>
+        <span class="pill-cap">두께</span>
         <div class="thickness-dots" id="thickness-dots"></div>
-        <span class="pill-sep"></span>
-        <button class="icon-only wave-btn" title="곡선 스타일 (추후 구현)">〜</button>
       </div>
 
       <div class="canvas-stage" id="canvas-stage">

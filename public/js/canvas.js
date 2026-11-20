@@ -260,6 +260,7 @@ class InkEngine {
     if (this.selectedTextBoxId || this.editingTextId) {
       this.selectedTextBoxId = null;
       this.editingTextId = null;
+      this._pruneEmptyTexts();
       this.redrawAll();
     }
 
@@ -288,11 +289,33 @@ class InkEngine {
       return; // 텍스트 요소는 자체 DOM 클릭으로 편집
     }
 
+    if (this.tool === "text") {
+      // 클릭한 자리에 빈 텍스트박스를 만들고 바로 입력할 수 있게 함
+      e.preventDefault(); // 이후 마우스 이벤트가 포커스를 빼앗아 가지 않도록
+      this.snapshot();
+      const fs = this.textFontSize || 28;
+      const t = {
+        id: uid(), x: p.x, y: p.y - fs * 0.6, w: 240, h: Math.round(fs * 1.7), text: "",
+        color: this.color,
+        fontFamily: (this.getTextFont && this.getTextFont()) || "inherit",
+        fontSize: fs,
+      };
+      this.note.texts.push(t);
+      this.editingTextId = t.id;
+      this.selectedTextBoxId = null;
+      this.redrawAll();
+      setTimeout(() => {
+        const el = this.textLayer.querySelector(".text-box.editing .text-el");
+        if (el && document.activeElement !== el) { el.focus(); this._placeCaretAtEnd(el); }
+      }, 30);
+      return;
+    }
+
     // 펜류 (fountain / brush / highlighter)
     this.snapshot();
     this.drawing = true;
     const isHighlight = this.tool === "highlighter";
-    const groupId = isHighlight ? null : this._resolveGroupId(p);
+    const groupId = null; // 묶음은 "글씨 인식"을 누를 때 regroupPending()이 한꺼번에 만듦
     this.currentStroke = {
       id: uid(),
       tool: this.tool,
@@ -407,32 +430,13 @@ class InkEngine {
     if (this.currentStroke) {
       const s = this.currentStroke;
       if (s.points.length < 2) s.points.push({ x: s.points[0].x + 0.1, y: s.points[0].y + 0.1 });
-      this.lastGroupId = s.groupId;
-      this.lastStrokeEndTime = Date.now();
-      this.lastStrokeBBox = this._bboxOfPoints(s.points);
       this.currentStroke = null;
       this.drawing = false;
-
-      if (s.groupId) this._scheduleRecognition(s.groupId);
-      this._fireChange();
+      this._fireChange(); // 자동 인식은 하지 않음 (글씨 인식 버튼으로만 인식)
     }
   }
 
-  // ---------- 그룹핑 로직 ----------
-  _resolveGroupId(p) {
-    const now = Date.now();
-    const timeOk = now - this.lastStrokeEndTime < 1300;
-    let distOk = false;
-    if (this.lastStrokeBBox) {
-      const b = this.lastStrokeBBox;
-      const cx = Math.max(b.x - 60, Math.min(p.x, b.x + b.w + 60));
-      const cy = Math.max(b.y - 40, Math.min(p.y, b.y + b.h + 40));
-      distOk = cx === p.x && cy === p.y; // p가 확장된 bbox 안에 있으면 true
-    }
-    if (this.lastGroupId && timeOk && distOk) return this.lastGroupId;
-    return uid();
-  }
-
+  // ---------- 그룹핑 로직 (글씨 인식 버튼을 누를 때 실행) ----------
   _bboxOfPoints(points) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const p of points) {
@@ -442,26 +446,58 @@ class InkEngine {
     return { x: minX, y: minY, w: Math.max(maxX - minX, 4), h: Math.max(maxY - minY, 4) };
   }
 
-  _scheduleRecognition(groupId) {
-    if (this.groupTimers.has(groupId)) clearTimeout(this.groupTimers.get(groupId));
-    const t = setTimeout(() => {
-      this.groupTimers.delete(groupId);
-      if (this.onGroupReady) this.onGroupReady(groupId);
-    }, 800);
-    this.groupTimers.set(groupId, t);
+  // 두 획(의 bbox)이 같은 줄에서 이어진 글씨로 볼 수 있는지.
+  // 쓰는 도중의 시간/거리 대신, 다 쓴 뒤의 "위치"만으로 판단하므로 글씨가 중간에 끊겨 분리되지 않음.
+  _sameTextRun(a, b, medianH) {
+    const ref = Math.max(a.h, b.h, medianH * 0.6);
+    const gapX = Math.max(0, Math.max(a.x, b.x) - Math.min(a.x + a.w, b.x + b.w));
+    const gapY = Math.max(0, Math.max(a.y, b.y) - Math.min(a.y + a.h, b.y + b.h));
+    const overlapY = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+    const hMin = Math.min(a.h, b.h), hMax = Math.max(a.h, b.h);
+    if (gapX > ref * 2.2) return false; // 글자 높이의 약 2배(띄어쓰기 한두 번)보다 멀리 떨어져 있으면 다른 덩어리
+    if (overlapY > 0 && overlapY >= hMin * 0.3) return true; // 세로로 겹치면 같은 줄
+    // i의 점, ! ? : ; 처럼 작은 조각이 큰 획 바로 옆/위아래에 있는 경우
+    if (hMin < hMax * 0.4 && gapY < hMax * 0.5 && gapX < hMax * 0.6) return true;
+    return false;
   }
 
-  // 지금 바로 미변환 그룹 전체 인식 (수동 변환 버튼)
-  convertAllPending() {
-    const groupIds = new Set();
-    for (const s of this.note.strokes) {
-      if (s.groupId && !s.converted) groupIds.add(s.groupId);
+  // 아직 변환 안 된 필기를 한 줄 단위로 묶어서 groupId를 붙이고, 인식할 groupId 목록을 돌려줌.
+  // 이전에 인식을 시도했다가 자신 없어서 남겨둔 획은 새로 쓴 획이 섞였거나, 인식 기준을
+  // 그때보다 낮췄을 때만 다시 시도함.
+  regroupPending(currentThreshold = 80) {
+    if (!this.note) return [];
+    const cand = this.note.strokes.filter((s) => !s.converted && s.tool !== "highlighter" && s.points.length > 0);
+    if (!cand.length) return [];
+    const boxes = cand.map((s) => this._bboxOfPoints(s.points));
+    const heights = boxes.map((b) => b.h).sort((x, y) => x - y);
+    const medianH = heights[Math.floor(heights.length / 2)];
+
+    const parent = cand.map((_, i) => i);
+    const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    for (let i = 0; i < cand.length; i++) {
+      for (let j = i + 1; j < cand.length; j++) {
+        if (find(i) !== find(j) && this._sameTextRun(boxes[i], boxes[j], medianH)) parent[find(i)] = find(j);
+      }
     }
-    groupIds.forEach((gid) => {
-      if (this.groupTimers.has(gid)) { clearTimeout(this.groupTimers.get(gid)); this.groupTimers.delete(gid); }
-      if (this.onGroupReady) this.onGroupReady(gid);
+    const clusters = new Map();
+    cand.forEach((s, i) => {
+      const r = find(i);
+      if (!clusters.has(r)) clusters.set(r, []);
+      clusters.get(r).push(s);
     });
-    return groupIds.size;
+
+    const result = [];
+    clusters.forEach((strokes) => {
+      const needs = strokes.some((s) => s.attempted === undefined || s.attempted > currentThreshold);
+      if (!needs) { strokes.forEach((s) => { s.groupId = null; }); return; }
+      const gid = uid();
+      strokes.forEach((s) => { s.groupId = gid; });
+      const bb = this._bboxOfPoints(strokes.flatMap((s) => s.points));
+      result.push({ gid, x: bb.x, y: bb.y, h: bb.h });
+    });
+    // 위→아래, 왼쪽→오른쪽 순서로 인식(진행 표시가 읽는 순서와 같아짐)
+    result.sort((a, b) => (Math.abs(a.y - b.y) > Math.min(a.h, b.h) * 0.5 ? a.y - b.y : a.x - b.x));
+    return result.map((r) => r.gid);
   }
 
   // groupId에 속한 미변환 스트로크들의 bbox
@@ -474,11 +510,29 @@ class InkEngine {
     return this._bboxOfPoints(pts);
   }
 
+  // 인식용 이미지: 이 묶음의 획만 검정색으로 흰 배경에 따로 그림 (다른 줄의 획·색·하이라이트가 섞이지 않게)
+  renderGroupImage(groupId, pad = 16) {
+    const strokes = this.note.strokes.filter((s) => s.groupId === groupId && !s.converted);
+    if (!strokes.length) return null;
+    const bb = this._bboxOfPoints(strokes.flatMap((s) => s.points));
+    const half = Math.max(...strokes.map((s) => s.width)) / 2;
+    const x0 = bb.x - half, y0 = bb.y - half, w = bb.w + half * 2, h = bb.h + half * 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(w + pad * 2);
+    canvas.height = Math.ceil(h + pad * 2);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.translate(pad - x0, pad - y0);
+    for (const s of strokes) this._drawStroke(s, ctx, { color: "#000", opacity: 1 });
+    return { canvas, bbox: { x: pad, y: pad, w, h } };
+  }
+
   // 그룹을 텍스트로 교체
   replaceGroupWithText(groupId, text, fontFamily) {
-    this.snapshot();
     const bbox = this.groupBBox(groupId);
-    if (!bbox) return;
+    if (!bbox) return false;
+    this.snapshot();
     let color = this.color;
     for (const s of this.note.strokes) {
       if (s.groupId === groupId && !s.converted) { color = s.color; s.converted = true; }
@@ -497,13 +551,20 @@ class InkEngine {
     });
     this.redrawAll();
     this._fireChange();
+    return true;
   }
 
-  // 그룹을 그대로 유지 (낮은 신뢰도) - 다음 그룹 판정에 영향 없도록 groupId 소멸
-  keepGroupAsInk(groupId) {
+  // 인식 기준에 못 미쳐 손글씨 그대로 두는 묶음: 어떤 기준으로 시도했는지 기록
+  keepGroupAsInk(groupId, threshold = 80) {
     for (const s of this.note.strokes) {
-      if (s.groupId === groupId) s.groupId = null;
+      if (s.groupId === groupId) { s.attempted = threshold; s.groupId = null; }
     }
+  }
+
+  _pruneEmptyTexts() {
+    const before = this.note.texts.length;
+    this.note.texts = this.note.texts.filter((t) => t.id === this.editingTextId || (t.text || "").trim() !== "");
+    return before !== this.note.texts.length;
   }
 
   // ---------- 지우개 ----------
@@ -627,13 +688,13 @@ class InkEngine {
   }
 
   // ---------- 렌더링 ----------
-  _drawStroke(s) {
-    const ctx = this.ctx;
+  _drawStroke(s, ctxOverride, opts) {
+    const ctx = ctxOverride || this.ctx;
     const pts = s.points;
     if (pts.length < 2) return;
     ctx.save();
-    ctx.globalAlpha = s.opacity;
-    ctx.strokeStyle = s.color;
+    ctx.globalAlpha = opts && opts.opacity !== undefined ? opts.opacity : s.opacity;
+    ctx.strokeStyle = (opts && opts.color) || s.color;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     if (s.tool === "highlighter") ctx.globalCompositeOperation = "multiply";
@@ -714,11 +775,16 @@ class InkEngine {
       content.textContent = t.text;
       content.addEventListener("input", () => {
         t.text = content.textContent;
+        if (content.scrollHeight > box.clientHeight + 1) { // 글이 길어지면 박스 높이도 같이 늘림
+          t.h = content.scrollHeight + 2;
+          box.style.height = t.h + "px";
+        }
         this._fireChange();
       });
       content.addEventListener("blur", () => {
         if (this.editingTextId === t.id) {
           this.editingTextId = null;
+          this._pruneEmptyTexts();
           this.redrawAll();
           this._fireChange();
         }
